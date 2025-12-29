@@ -1,0 +1,238 @@
+"""
+Main orchestration pipeline for video translation
+NEW FLOW: Whisper → LLM Refiner → Google Translate → TTS
+WITH: Semantic RAG (self-pruning)
+"""
+from pathlib import Path
+from typing import Dict, Any
+import json
+import numpy as np
+from utils.logger import setup_logger
+from utils.file_manager import FileManager
+from modules.video_processor import VideoProcessor
+from modules.frame_embedder import FrameEmbedder
+from modules.vector_store import VectorStore
+from modules.speech_to_text import SpeechToText
+from modules.transcription_refiner import TranscriptionRefiner
+from modules.simple_translator import Translator
+from modules.text_to_speech import TextToSpeech
+from config import settings
+
+logger = setup_logger("pipeline")
+
+
+class TranslationPipeline:
+    """
+    Orchestrates the complete video translation workflow
+    """
+    
+    def __init__(self, job_id: str = None):
+        """
+        Initialize pipeline
+        
+        Args:
+            job_id: Job identifier (generated if not provided)
+        """
+        self.job_id = job_id
+        self.file_manager = FileManager(job_id)
+        logger.info(f"Initialized translation pipeline for job: {self.file_manager.job_id}")
+        self.job_id = self.file_manager.job_id
+    
+    def process(self,
+                video_path: Path,
+                target_language: str,
+                source_language: str = "auto",
+                use_rag: bool = True) -> Dict[str, Any]:
+        """
+        Process video translation
+        
+        Args:
+            video_path: Path to input video
+            target_language: Target language for translation
+            source_language: Source language (auto-detect if 'auto')
+            use_rag: Whether to use RAG context
+            
+        Returns:
+            Dictionary with processing results and file paths
+        """
+        try:
+            logger.info(f"Starting translation pipeline")
+            logger.info(f"  Video: {video_path}")
+            logger.info(f"  Target language: {target_language}")
+            logger.info(f"  Use RAG: {use_rag}")
+            
+            # Step 1: Extract audio
+            logger.info("Step 1/9: Extracting audio...")
+            video_processor = VideoProcessor(video_path)
+            audio_path = self.file_manager.get_path('original_audio')
+            video_processor.extract_audio(audio_path)
+            self.file_manager.track_file('original_audio', audio_path)
+            
+            # Step 2: Extract frames
+            logger.info("Step 2/9: Extracting frames...")
+            frames_dir = self.file_manager.get_path('frames')
+            video_processor.extract_frames(frames_dir, settings.frame_extract_fps)
+            self.file_manager.track_file('frames_directory', frames_dir)
+            
+            # Step 3-4: Semantic RAG with self-pruning
+            visual_context = None
+            if use_rag:
+                logger.info("Step 3/9: Generating frame embeddings...")
+                embedder = FrameEmbedder()
+                frame_embeddings_list = embedder.embed_frames(frames_dir)
+                
+                # FrameEmbedder returns list of tuples: (path, embedding)
+                paths = [fe[0] for fe in frame_embeddings_list]
+                embeddings = [fe[1] for fe in frame_embeddings_list]
+                
+                # Store in vector DB
+                logger.info("Step 3/9: Storing in vector database...")
+                vector_db_path = self.file_manager.get_path('vector_db')
+                vector_store = VectorStore(vector_db_path, f"frames_{self.job_id}")
+                vector_store.add_frames(frame_embeddings_list)
+                self.file_manager.track_file('vector_db', vector_db_path)
+                
+                # Step 4: Semantic RAG with self-pruning
+                logger.info("Step 4/9: Semantic RAG analysis...")
+                from modules.semantic_rag import SemanticRAG
+                
+                semantic_rag = SemanticRAG(embedder=embedder)
+                analysis = semantic_rag.analyze_frames(embeddings, paths)
+                
+                if analysis is None:
+                    logger.warning("⚠️  RAG self-pruned (confidence < 0.3). Using Whisper alone.")
+                    use_rag = False
+                else:
+                    visual_context = analysis['context']
+                    
+                    # Save analysis
+                    rag_path = self.file_manager.job_dir / 'rag_analysis.json'
+                    rag_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(rag_path, 'w', encoding='utf-8') as f:
+                        json.dump({
+                            'confidence': float(analysis['confidence']),
+                            'concepts': [(c, float(s)) for c, s in analysis['concepts']],
+                            'categories': {
+                                k: [(cat, float(sc)) for cat, sc in v]
+                                for k, v in analysis['categories'].items()
+                            },
+                            'context': analysis['context']
+                        }, f, indent=2, ensure_ascii=False)
+                    
+                    self.file_manager.track_file('rag_analysis', rag_path)
+                    logger.info(f"✅ RAG confidence: {analysis['confidence']:.3f}")
+                    logger.info(f"📝 Context: {visual_context}")
+            else:
+                logger.info("Step 3-4/9: Skipping RAG (disabled)")
+            
+            # Step 5: Speech to text with Whisper
+            logger.info("Step 5/9: Transcribing audio with Whisper...")
+            stt = SpeechToText()
+            
+            lang = None if source_language == "auto" else source_language
+            
+            if use_rag and visual_context:
+                transcription = stt.transcribe_with_context(audio_path, visual_context, lang)
+            else:
+                transcription = stt.transcribe(audio_path, lang)
+            
+            # Save transcription
+            trans_json_path = self.file_manager.get_path('transcription_json')
+            trans_txt_path = self.file_manager.get_path('transcription_txt')
+            stt.save_transcription(transcription, trans_json_path, trans_txt_path)
+            self.file_manager.track_file('transcription_json', trans_json_path)
+            self.file_manager.track_file('transcription_txt', trans_txt_path)
+            
+            # Get segments
+            segments = stt.get_segments(transcription)
+            
+            # Step 6: Refine transcription with LLM
+            logger.info("Step 6/9: Refining transcription with LLM...")
+            refiner = TranscriptionRefiner()
+            refined_segments = refiner.refine_segments(segments, visual_context if use_rag else None)
+            
+            # Save refined transcription
+            refined_json_path = self.file_manager.job_dir / 'refined_transcription.json'
+            refined_txt_path = self.file_manager.job_dir / 'refined_transcription.txt'
+            
+            refined_json_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(refined_json_path, 'w', encoding='utf-8') as f:
+                json.dump(refined_segments, f, indent=2, ensure_ascii=False)
+            
+            refined_txt_path.parent.mkdir(parents=True, exist_ok=True)
+            refined_text = " ".join([seg.get('refined', seg.get('text', '')) for seg in refined_segments])
+            with open(refined_txt_path, 'w', encoding='utf-8') as f:
+                f.write(refined_text)
+            
+            self.file_manager.track_file('refined_json', refined_json_path)
+            self.file_manager.track_file('refined_txt', refined_txt_path)
+            
+            logger.info(f"Refined transcription saved")
+            
+            # Step 7: Translate refined text with Google Translate
+            logger.info(f"Step 7/9: Translating to {target_language} with Google Translate...")
+            translator = Translator()
+            translated_segments = translator.translate_segments(refined_segments, target_language)
+            
+            # Save translation
+            transl_json_path = self.file_manager.get_path('translation_json')
+            transl_txt_path = self.file_manager.get_path('translation_txt')
+            translator.save_translation(translated_segments, transl_json_path, transl_txt_path)
+            self.file_manager.track_file('translation_json', transl_json_path)
+            self.file_manager.track_file('translation_txt', transl_txt_path)
+            
+            # Step 8: Text to speech
+            logger.info("Step 8/9: Generating speech from translation...")
+            tts = TextToSpeech(language=self._get_tts_language_code(target_language))
+            translated_audio_path = self.file_manager.get_path('translated_audio')
+            tts.segments_to_speech(translated_segments, translated_audio_path)
+            self.file_manager.track_file('translated_audio', translated_audio_path)
+            
+            # Step 9: Reconstruct video
+            logger.info("Step 9/9: Reconstructing video with new audio...")
+            final_video_path = self.file_manager.get_path('final_video')
+            VideoProcessor.reconstruct_video(video_path, translated_audio_path, final_video_path)
+            self.file_manager.track_file('final_video', final_video_path)
+            
+            # Save manifest
+            manifest_path = self.file_manager.save_manifest()
+            
+            logger.info("Translation pipeline completed successfully!")
+            
+            return {
+                'status': 'completed',
+                'job_id': self.job_id,
+                'files': self.file_manager.tracked_files,
+                'manifest': str(manifest_path)
+            }
+            
+        except Exception as e:
+            logger.error(f"Pipeline failed: {e}", exc_info=True)
+            raise
+    
+    def _get_tts_language_code(self, language: str) -> str:
+        """
+        Convert language name to gTTS language code
+        
+        Args:
+            language: Language name (e.g., 'Spanish', 'French')
+            
+        Returns:
+            Language code (e.g., 'es', 'fr')
+        """
+        language_map = {
+            'spanish': 'es',
+            'french': 'fr',
+            'german': 'de',
+            'italian': 'it',
+            'portuguese': 'pt',
+            'russian': 'ru',
+            'japanese': 'ja',
+            'korean': 'ko',
+            'chinese': 'zh-cn',
+            'arabic': 'ar',
+            'hindi': 'hi',
+            'english': 'en'
+        }
+        
+        return language_map.get(language.lower(), 'en')
