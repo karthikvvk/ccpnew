@@ -30,11 +30,11 @@ class Settings(BaseSettings):
     whisper_device: str = "cpu"
     whisper_language: str = "auto"
     
-    # LLM Settings
-    llm_model: str = "mistralai/Mistral-7B-Instruct-v0.2"
+    # LLM Settings (Flan-T5-Large: CPU-optimized for sentence completion)
+    llm_model: str = "google/flan-t5-large"
     llm_device: str = "cpu"
-    llm_max_length: int = 2048
-    llm_temperature: float = 0.7
+    llm_max_length: int = 512  # T5 works better with shorter outputs
+    llm_temperature: float = 0.3  # Lower temperature for more deterministic refinement
     
     # Vector Database
     vector_db_path: Path = Path("./vector_db")
@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     # Colab GPU Server (Optional)
     use_colab_gpu: bool = False
     colab_api_url: str = ""
+    
+    # RAG configuration
+    rag_enable_self_pruning: bool = False  # False=testing, True=production
     
     class Config:
         env_file = ".env"

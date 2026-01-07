@@ -1,41 +1,23 @@
-# FastAPI
-fastapi==0.109.0
-uvicorn[standard]==0.27.0
-python-multipart==0.0.6
-pydantic==2.5.3
-pydantic-settings==2.1.0
-
-# Video Processing
-ffmpeg-python==0.2.0
-opencv-python==4.9.0.80
-Pillow==10.2.0
-
-# Audio Processing
-pydub==0.25.1
-librosa==0.10.1
-soundfile==0.12.1
-
-# Speech & Translation
-openai-whisper==20231117
-gTTS==2.5.0
-
-# Vector Database
-chromadb==0.4.22
-sentence-transformers==2.3.1
-
-# LLM (Local)
-transformers==4.36.2
-torch==2.1.2
-accelerate==0.25.0
-bitsandbytes==0.41.3
-
-# Image Embeddings
-Pillow==10.2.0
-numpy==1.26.3
-
-# Utilities
-python-dotenv==1.0.0
-requests==2.31.0
-tqdm==4.66.1
-aiofiles==23.2.1
+fastapi
+uvicorn[standard]
+pydantic-settings
+ffmpeg-python
+opencv-python
+pydub
+librosa
+soundfile
+openai-whisper
+chromadb
+sentence-transformers
+transformers
+sentencepiece
+accelerate
+bitsandbytes
+Pillow
+python-dotenv
+aiofiles
 googletrans==4.0.0rc1
+deep-translator
+gtts
+python-multipart
+deep_translator

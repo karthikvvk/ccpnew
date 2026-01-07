@@ -231,16 +231,20 @@ class SemanticRAG:
             frame_matches.append(matches)
             all_scores.extend([score for _, score in matches])
         
-        # Self-pruning check
+        # Self-pruning check (if enabled)
         avg_confidence = np.mean(all_scores)
         logger.info(f"Average frame-to-concept confidence: {avg_confidence:.3f}")
         
-        if avg_confidence < self.BASE_SCORE_THRESHOLD:
-            logger.warning(
-                f"Confidence {avg_confidence:.3f} below threshold {self.BASE_SCORE_THRESHOLD}. "
-                "Frames too unique - skipping RAG (Whisper alone is better)"
-            )
-            return None
+        from config import settings
+        if settings.rag_enable_self_pruning:
+            if avg_confidence < self.BASE_SCORE_THRESHOLD:
+                logger.warning(
+                    f"Confidence {avg_confidence:.3f} below threshold {self.BASE_SCORE_THRESHOLD}. "
+                    "Frames too unique - skipping RAG (Whisper alone is better)"
+                )
+                return None
+        else:
+            logger.info(f"Self-pruning DISABLED - continuing with RAG (confidence: {avg_confidence:.3f})")
         
         # Step 2: Aggregate with temporal weighting
         concept_votes = defaultdict(lambda: {"score": 0.0, "count": 0})

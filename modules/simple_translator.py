@@ -1,7 +1,7 @@
 """
-Translation module using Google Translate API (simple, reliable)
+Translation module using deep-translator (more reliable than googletrans)
 """
-from googletrans import Translator as GoogleTranslator
+from deep_translator import GoogleTranslator
 from typing import List, Dict, Any
 from pathlib import Path
 import json
@@ -11,12 +11,11 @@ logger = setup_logger("translator")
 
 
 class Translator:
-    """Simple translator using Google Translate"""
+    """Simple translator using Google Translate via deep-translator"""
     
     def __init__(self):
         """Initialize translator"""
-        self.translator = GoogleTranslator()
-        logger.info("Google Translator initialized")
+        logger.info("Google Translator initialized (deep-translator)")
     
     def translate_text(self, text: str, target_language: str) -> str:
         """
@@ -30,6 +29,9 @@ class Translator:
             Translated text
         """
         try:
+            if not text or not text.strip():
+                return text
+            
             # Map language names to codes
             lang_map = {
                 'spanish': 'es',
@@ -40,16 +42,21 @@ class Translator:
                 'russian': 'ru',
                 'japanese': 'ja',
                 'korean': 'ko',
-                'chinese': 'zh-cn',
+                'chinese': 'zh-CN',
                 'arabic': 'ar',
                 'hindi': 'hi',
-                'english': 'en'
+                'english': 'en',
+                'tamil': 'ta',
+                'telugu': 'te',
+                'bengali': 'bn'
             }
             
             dest_lang = lang_map.get(target_language.lower(), 'en')
             
-            result = self.translator.translate(text, dest=dest_lang)
-            return result.text
+            # Use deep-translator
+            translator = GoogleTranslator(source='auto', target=dest_lang)
+            result = translator.translate(text)
+            return result if result else text
             
         except Exception as e:
             logger.error(f"Translation failed: {e}")
@@ -103,7 +110,7 @@ class Translator:
         
         # Save text
         txt_path.parent.mkdir(parents=True, exist_ok=True)
-        full_text = " ".join([seg['translated'] for seg in translated_segments])
+        full_text = " ".join([seg['translated'] for seg in translated_segments if seg['translated']])
         with open(txt_path, 'w', encoding='utf-8') as f:
             f.write(full_text)
         

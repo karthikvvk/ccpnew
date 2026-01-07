@@ -16,9 +16,12 @@ A modular FastAPI-based video translation system that uses RAG-enhanced speech r
 
 ```
 Video Input → Audio/Frame Extraction → Vector DB (Frame Embeddings) 
-    → RAG Context Generation → Whisper STT (with context)
-    → LLM Translation (with context) → gTTS → Video Reconstruction
+    → Semantic RAG Analysis → Whisper STT (with context)
+    → LLM Refinement (sentence completion) → Google Translate
+    → gTTS → Video Reconstruction
 ```
+
+> **Note**: The LLM is used for **sentence completion/refinement** (fixing broken Whisper output), NOT translation. Translation is handled by Google Translate for reliability.
 
 ## Installation
 
@@ -57,7 +60,7 @@ cp .env.example .env
 
 2. Edit `.env` to configure settings:
    - `WHISPER_MODEL`: Whisper model size (tiny, base, small, medium, large)
-   - `LLM_MODEL`: Local LLM model for translation
+   - `LLM_MODEL`: Model for sentence refinement (default: `google/flan-t5-large`)
    - `WHISPER_DEVICE`: cpu or cuda
    - `LLM_DEVICE`: cpu or cuda
 
@@ -147,11 +150,13 @@ For each translation job, the following files are generated in `outputs/{job_id}
 ```
 ├── modules/
 │   ├── video_processor.py      # Video/audio extraction & reconstruction
-│   ├── frame_embedder.py       # Frame embedding generation
+│   ├── frame_embedder.py       # CLIP frame embedding generation
 │   ├── vector_store.py         # ChromaDB integration
+│   ├── semantic_rag.py         # Semantic RAG with self-pruning
 │   ├── rag_context.py          # Visual context generation
 │   ├── speech_to_text.py       # Whisper STT
-│   ├── translator.py           # LLM translation
+│   ├── transcription_refiner.py # LLM sentence completion (Flan-T5)
+│   ├── simple_translator.py    # Google Translate wrapper
 │   └── text_to_speech.py       # gTTS synthesis
 ├── api/
 │   └── endpoints.py            # FastAPI endpoints
@@ -223,17 +228,27 @@ Edit `.env`:
 # Whisper model sizes: tiny, base, small, medium, large
 WHISPER_MODEL=large
 
-# LLM models (HuggingFace)
-LLM_MODEL=mistralai/Mistral-7B-Instruct-v0.2
+# LLM for sentence refinement (CPU-optimized options)
+LLM_MODEL=google/flan-t5-large      # Default, fast on CPU
+# LLM_MODEL=google/flan-t5-xl       # Better quality, needs 16GB+ RAM
+# LLM_MODEL=meta-llama/Llama-3.2-1B-Instruct  # GPU recommended
+```
 
-# Or use other models:
-# LLM_MODEL=meta-llama/Llama-2-7b-chat-hf
-# LLM_MODEL=google/flan-t5-large
+### RAG Toggle
+
+RAG can be configured in two modes via `.env`:
+
+```env
+# Testing mode (always use RAG regardless of confidence)
+RAG_ENABLE_SELF_PRUNING=False
+
+# Production mode (skip RAG if confidence < 0.3)
+RAG_ENABLE_SELF_PRUNING=True
 ```
 
 ### Disable RAG
 
-If you want faster processing without visual context:
+For faster processing without visual context:
 
 ```python
 pipeline.process(
@@ -266,6 +281,12 @@ Install ffmpeg using your system package manager.
 - Use smaller models
 - Reduce frame extraction FPS
 - Use Colab for GPU acceleration
+
+## Roadmap
+
+### Coming Soon: Voice Dubbing
+
+A voice dubbing feature is planned that will clone the original speaker's voice for the translated audio. Details TBD.
 
 ## License
 

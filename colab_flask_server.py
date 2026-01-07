@@ -1,23 +1,20 @@
 """
-Flask server for Colab - Exposes Whisper and LLM as API endpoints
-This runs in a single Colab cell and processes requests from your local machine
+Flask server for Colab - GPU acceleration for Whisper and LLM only
+Everything else (translation, TTS, etc.) runs locally
 
-Copy this entire cell into Colab and run it
+Copy this entire code into a Colab cell and run it
 """
 
-# Cell 1: Install dependencies and start Flask server
 CODE = """
 # Install dependencies
-!pip install -q flask flask-cors pyngrok openai-whisper transformers accelerate bitsandbytes
+!pip install -q flask flask-cors pyngrok openai-whisper transformers accelerate bitsandbytes sentencepiece
 
 import os
-import json
-import base64
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import whisper
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoModelForCausalLM
 from pyngrok import ngrok
 import tempfile
 
@@ -26,177 +23,163 @@ CORS(app)
 
 # Global model cache
 whisper_model = None
-llm_model = None
-llm_tokenizer = None
+refiner_model = None
+refiner_tokenizer = None
 
 @app.route('/health', methods=['GET'])
 def health():
-    '''Health check endpoint'''
-    gpu_available = torch.cuda.is_available()
-    gpu_name = torch.cuda.get_device_name(0) if gpu_available else "No GPU"
-    
+    '''Health check'''
     return jsonify({
         'status': 'healthy',
-        'gpu_available': gpu_available,
-        'gpu_name': gpu_name,
+        'gpu': torch.cuda.get_device_name(0) if torch.cuda.is_available() else "No GPU",
         'whisper_loaded': whisper_model is not None,
-        'llm_loaded': llm_model is not None
+        'refiner_loaded': refiner_model is not None
     })
 
 @app.route('/load_whisper', methods=['POST'])
-def load_whisper_model():
-    '''Load Whisper model into memory'''
+def load_whisper():
+    '''Load Whisper model on GPU'''
     global whisper_model
     
-    data = request.json
+    data = request.json or {}
     model_size = data.get('model_size', 'medium')
     
-    print(f"Loading Whisper {model_size}...")
+    print(f"Loading Whisper {model_size} on GPU...")
     whisper_model = whisper.load_model(model_size, device="cuda")
+    print("✅ Whisper loaded!")
     
-    return jsonify({
-        'status': 'success',
-        'message': f'Whisper {model_size} loaded on GPU'
-    })
+    return jsonify({'status': 'success', 'model': model_size})
 
+@app.route('/load_refiner', methods=['POST'])
+def load_refiner():
+    '''Load LLM refiner (Flan-T5) on GPU'''
+    global refiner_model, refiner_tokenizer
+    
+    data = request.json or {}
+    model_name = data.get('model_name', 'google/flan-t5-large')
+    
+    print(f"Loading {model_name} on GPU...")
+    refiner_tokenizer = AutoTokenizer.from_pretrained(model_name)
+    
+    if 't5' in model_name.lower() or 'flan' in model_name.lower():
+        refiner_model = AutoModelForSeq2SeqLM.from_pretrained(
+            model_name, torch_dtype=torch.float16, device_map="auto"
+        )
+    else:
+        refiner_model = AutoModelForCausalLM.from_pretrained(
+            model_name, torch_dtype=torch.float16, device_map="auto", load_in_8bit=True
+        )
+    print("✅ Refiner loaded!")
+    
+    return jsonify({'status': 'success', 'model': model_name})
+
+# Alias for compatibility
 @app.route('/load_llm', methods=['POST'])
-def load_llm_model():
-    '''Load LLM model into memory'''
-    global llm_model, llm_tokenizer
-    
-    data = request.json
-    model_name = data.get('model_name', 'mistralai/Mistral-7B-Instruct-v0.2')
-    
-    print(f"Loading {model_name}...")
-    llm_tokenizer = AutoTokenizer.from_pretrained(model_name)
-    llm_model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype=torch.float16,
-        device_map="auto",
-        load_in_8bit=True
-    )
-    
-    return jsonify({
-        'status': 'success',
-        'message': f'{model_name} loaded on GPU'
-    })
+def load_llm():
+    return load_refiner()
 
 @app.route('/whisper/transcribe', methods=['POST'])
 def transcribe():
-    '''Transcribe audio using Whisper'''
+    '''Transcribe audio using Whisper on GPU'''
     global whisper_model
     
     if whisper_model is None:
-        return jsonify({'error': 'Whisper model not loaded. Call /load_whisper first'}), 400
+        return jsonify({'error': 'Call /load_whisper first'}), 400
     
-    # Get audio file
     if 'audio' not in request.files:
-        return jsonify({'error': 'No audio file provided'}), 400
+        return jsonify({'error': 'No audio file'}), 400
     
     audio_file = request.files['audio']
     language = request.form.get('language', None)
     
-    # Save to temp file
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_audio:
-        audio_file.save(temp_audio.name)
-        temp_path = temp_audio.name
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as f:
+        audio_file.save(f.name)
+        temp_path = f.name
     
     try:
-        print(f"Transcribing {temp_path}...")
+        print("Transcribing...")
         result = whisper_model.transcribe(
             temp_path,
             language=language if language != 'auto' else None,
             verbose=False
         )
-        
-        # Clean up
         os.unlink(temp_path)
-        
-        return jsonify({
-            'status': 'success',
-            'result': result
-        })
-        
+        return jsonify({'status': 'success', 'result': result})
     except Exception as e:
         os.unlink(temp_path)
         return jsonify({'error': str(e)}), 500
 
-@app.route('/llm/translate', methods=['POST'])
-def translate():
-    '''Translate text using LLM'''
-    global llm_model, llm_tokenizer
+@app.route('/llm/refine', methods=['POST'])
+def refine():
+    '''Refine/fix transcription segments using LLM on GPU'''
+    global refiner_model, refiner_tokenizer
     
-    if llm_model is None or llm_tokenizer is None:
-        return jsonify({'error': 'LLM model not loaded. Call /load_llm first'}), 400
+    if refiner_model is None:
+        return jsonify({'error': 'Call /load_refiner first'}), 400
     
     data = request.json
     segments = data.get('segments', [])
-    target_language = data.get('target_language', 'Spanish')
     visual_context = data.get('visual_context', None)
     
-    print(f"Translating {len(segments)} segments to {target_language}...")
+    print(f"Refining {len(segments)} segments on GPU...")
+    refined_segments = []
     
-    translated_segments = []
-    
-    for i, segment in enumerate(segments):
-        # Build prompt
-        context_info = f"\\n\\nVisual Context: {visual_context}" if visual_context else ""
-        prompt = f'''[INST] You are a professional translator. Translate the following text to {target_language}.
-Only provide the translation, nothing else.{context_info}
-
-Text to translate: {segment['text']}
-
-Translation: [/INST]'''
+    for i, seg in enumerate(segments):
+        text = seg.get('text', '')
         
-        # Generate
-        inputs = llm_tokenizer(prompt, return_tensors="pt").to("cuda")
+        if visual_context:
+            prompt = f"Fix grammar and complete sentences. Context: {visual_context}. Text: {text}"
+        else:
+            prompt = f"Fix grammar and complete sentences: {text}"
+        
+        inputs = refiner_tokenizer(prompt, return_tensors="pt", max_length=512, truncation=True).to("cuda")
         with torch.no_grad():
-            outputs = llm_model.generate(
-                **inputs,
-                max_new_tokens=512,
-                temperature=0.7,
-                do_sample=True,
-                pad_token_id=llm_tokenizer.eos_token_id
-            )
+            outputs = refiner_model.generate(**inputs, max_new_tokens=256, temperature=0.3, do_sample=True)
         
-        full_output = llm_tokenizer.decode(outputs[0], skip_special_tokens=True)
-        translation = full_output.replace(prompt, "").strip()
+        refined = refiner_tokenizer.decode(outputs[0], skip_special_tokens=True)
         
-        translated_segments.append({
-            'start': segment['start'],
-            'end': segment['end'],
-            'original': segment['text'],
-            'translated': translation
+        refined_segments.append({
+            'start': seg['start'],
+            'end': seg['end'],
+            'original': text,
+            'refined': refined.strip()
         })
         
-        if (i + 1) % 5 == 0:
-            print(f"  Translated {i + 1}/{len(segments)}")
+        if (i + 1) % 10 == 0:
+            print(f"  {i + 1}/{len(segments)} done")
     
-    return jsonify({
-        'status': 'success',
-        'translated_segments': translated_segments
-    })
+    print("✅ Refinement complete!")
+    return jsonify({'status': 'success', 'refined_segments': refined_segments})
 
-# Start ngrok tunnel
+# Start server
 print("Starting ngrok tunnel...")
 public_url = ngrok.connect(5000)
-print(f"\\n{'='*60}")
-print(f"🚀 Colab GPU Server is running!")
-print(f"{'='*60}")
-print(f"Public URL: {public_url}")
-print(f"\\nAdd this to your local .env file:")
-print(f"COLAB_API_URL={public_url}")
-print(f"USE_COLAB_GPU=True")
-print(f"{'='*60}\\n")
+print(f"\\n{'='*50}")
+print(f"🚀 COLAB GPU SERVER READY")
+print(f"{'='*50}")
+print(f"URL: {public_url}")
+print(f"\\nSet in your local .env:")
+print(f"  COLAB_API_URL={public_url}")
+print(f"  USE_COLAB_GPU=True")
+print(f"{'='*50}")
+print(f"\\nEndpoints:")
+print(f"  POST /load_whisper  - Load Whisper")
+print(f"  POST /load_refiner  - Load Flan-T5")
+print(f"  POST /whisper/transcribe - Transcribe audio")
+print(f"  POST /llm/refine - Fix sentences")
+print(f"{'='*50}\\n")
 
-# Run Flask
 app.run(port=5000)
 """
 
-print("="*70)
-print("COLAB FLASK SERVER - GPU ACCELERATION")
-print("="*70)
-print("\\nCopy the code below into a Colab cell and run it:")
-print("="*70)
+print("="*60)
+print("COLAB GPU SERVER - Whisper + LLM Refinement ONLY")
+print("="*60)
+print("\\nThis server handles ONLY:")
+print("  1. Whisper transcription (GPU)")
+print("  2. LLM sentence refinement (GPU)")
+print("\\nTranslation, TTS, etc. run locally.")
+print("="*60)
+print("\\nCopy below into a Colab cell:")
+print("="*60)
 print(CODE)
-print("="*70)

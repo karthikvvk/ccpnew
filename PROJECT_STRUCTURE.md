@@ -18,9 +18,11 @@ ccpnew/
 │   ├── video_processor.py      # Video/audio extraction & reconstruction
 │   ├── frame_embedder.py       # CLIP-based frame embeddings
 │   ├── vector_store.py         # ChromaDB vector database
+│   ├── semantic_rag.py         # Semantic RAG with self-pruning
 │   ├── rag_context.py          # Visual context generation
 │   ├── speech_to_text.py       # Whisper STT (Colab-ready)
-│   ├── translator.py           # LLM translation (Colab-ready)
+│   ├── transcription_refiner.py # LLM sentence completion (Flan-T5)
+│   ├── simple_translator.py    # Google Translate wrapper
 │   └── text_to_speech.py       # gTTS speech synthesis
 │
 ├── api/                        # FastAPI endpoints
@@ -36,19 +38,15 @@ ccpnew/
 │   ├── logger.py               # Logging system
 │   └── file_manager.py         # File tracking and management
 │
-├── examples/                   # Usage examples
-│   └── example_usage.py        # API and pipeline examples
-│
 └── outputs/                    # Generated files (auto-created)
     └── {job_id}/
         ├── frames/             # Extracted frames
         ├── vector_db/          # ChromaDB database
         ├── original_audio.wav
         ├── transcription.json
-        ├── transcription.txt
-        ├── rag_context.json
+        ├── refined_transcription.json
+        ├── rag_analysis.json
         ├── translation.json
-        ├── translation.txt
         ├── translated_audio.mp3
         ├── final_video.mp4
         └── manifest.json
@@ -74,11 +72,11 @@ ccpnew/
 - Similarity search for relevant frames
 - Persistent storage with metadata
 
-**rag_context.py**
-- Generates textual descriptions from frames
-- Uses vision-language model (GIT or similar)
-- Provides visual context for transcription
-- **Colab-ready**: Can run on GPU for faster processing
+**semantic_rag.py**
+- CLIP-based semantic matching with hierarchical clustering
+- Temporal voting and self-pruning (configurable)
+- Generates confidence scores for visual context
+- Self-prunes when confidence < 0.3 (production mode)
 
 **speech_to_text.py**
 - Local Whisper model for speech recognition
@@ -86,11 +84,15 @@ ccpnew/
 - Handles multiple languages
 - **Colab-ready**: Includes GPU-accelerated function
 
-**translator.py**
-- Local LLM for translation (Mistral/Llama)
-- Context-aware translation using RAG
-- Preserves segment timing
-- **Colab-ready**: Includes GPU-accelerated function
+**transcription_refiner.py**
+- Uses Flan-T5 (CPU-optimized) to fix Whisper output
+- Corrects grammar, completes broken sentences
+- Integrates visual context for better refinement
+
+**simple_translator.py**
+- Google Translate wrapper for reliable translation
+- Fast, no heavy model loading
+- Handles segment-based translation with timing
 
 **text_to_speech.py**
 - gTTS for speech synthesis
@@ -137,11 +139,12 @@ ccpnew/
 3. **Frame Extraction** → Extract frames at configured FPS
 4. **Frame Embedding** → Generate CLIP embeddings for all frames
 5. **Vector Storage** → Store embeddings in ChromaDB
-6. **RAG Context** → Query relevant frames and generate descriptions
+6. **Semantic RAG** → Analyze frames, generate visual context (with self-pruning)
 7. **Speech-to-Text** → Whisper transcription with visual context
-8. **Translation** → LLM translates text using RAG context
-9. **Text-to-Speech** → gTTS generates audio in target language
-10. **Video Reconstruction** → Combine original video with new audio
+8. **LLM Refinement** → Fix/complete broken sentences (Flan-T5)
+9. **Translation** → Google Translate to target language
+10. **Text-to-Speech** → gTTS generates audio in target language
+11. **Video Reconstruction** → Combine original video with new audio
 
 ## GPU Acceleration (Colab)
 
@@ -158,14 +161,17 @@ Key settings in `.env`:
 ```env
 # Models
 WHISPER_MODEL=medium          # tiny, base, small, medium, large
-LLM_MODEL=mistralai/Mistral-7B-Instruct-v0.2
+LLM_MODEL=google/flan-t5-large  # CPU-optimized for sentence completion
 
 # Devices
 WHISPER_DEVICE=cpu            # cpu or cuda
 LLM_DEVICE=cpu                # cpu or cuda
 
+# RAG Toggle
+RAG_ENABLE_SELF_PRUNING=False # False=testing, True=production
+
 # Processing
-FRAME_EXTRACT_FPS=1           # Frames per second to extract
+FRAME_EXTRACT_FPS=2           # Frames per second to extract
 ```
 
 ## File Logging
