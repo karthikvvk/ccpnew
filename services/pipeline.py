@@ -143,13 +143,20 @@ class TranslationPipeline:
             self.file_manager.track_file('transcription_json', trans_json_path)
             self.file_manager.track_file('transcription_txt', trans_txt_path)
             
-            # Get segments
+            # Get segments and detected language
             segments = stt.get_segments(transcription)
+            detected_language = transcription.get('language', 'en')  # Get Whisper detected language
+            logger.info(f"Detected source language: {detected_language}")
             
             # Step 6: Refine transcription with LLM
+            # Note: Flan-T5 only works well with English, so skip refinement for other languages
             logger.info("Step 6/9: Refining transcription with LLM...")
             refiner = TranscriptionRefiner()
-            refined_segments = refiner.refine_segments(segments, visual_context if use_rag else None)
+            refined_segments = refiner.refine_segments(
+                segments, 
+                visual_context if use_rag else None,
+                source_language=detected_language  # Pass detected language
+            )
             
             # Save refined transcription
             refined_json_path = self.file_manager.job_dir / 'refined_transcription.json'
@@ -181,11 +188,27 @@ class TranslationPipeline:
             self.file_manager.track_file('translation_json', transl_json_path)
             self.file_manager.track_file('translation_txt', transl_txt_path)
             
-            # Step 8: Text to speech
-            logger.info("Step 8/9: Generating speech from translation...")
-            tts = TextToSpeech(language=self._get_tts_language_code(target_language))
-            translated_audio_path = self.file_manager.get_path('translated_audio')
-            tts.segments_to_speech(translated_segments, translated_audio_path)
+            # Step 8: Text to speech (Voice Cloning or gTTS)
+            if settings.use_voice_cloning:
+                logger.info("Step 8/9: Generating speech with voice cloning (XTTS-v2)...")
+                from modules.voice_cloner import VoiceCloner, get_language_code
+                
+                voice_cloner = VoiceCloner()
+                translated_audio_path = self.file_manager.get_path('translated_audio')
+                
+                # Use original audio as reference for voice cloning
+                voice_cloner.segments_to_dubbed_audio(
+                    segments=translated_segments,
+                    reference_audio=audio_path,
+                    output_path=translated_audio_path,
+                    language=get_language_code(target_language)
+                )
+            else:
+                logger.info("Step 8/9: Generating speech with gTTS...")
+                tts = TextToSpeech(language=self._get_tts_language_code(target_language))
+                translated_audio_path = self.file_manager.get_path('translated_audio')
+                tts.segments_to_speech(translated_segments, translated_audio_path)
+            
             self.file_manager.track_file('translated_audio', translated_audio_path)
             
             # Step 9: Reconstruct video

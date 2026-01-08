@@ -23,18 +23,22 @@ class SpeechToText:
         Initialize speech-to-text
         
         Args:
-            model_size: Whisper model size (tiny, base, small, medium, large)
+            model_size: Whisper model size (tiny, base, small, medium, large, large-v3)
             device: Device to run on ('cpu' or 'cuda')
         """
         self.model_size = model_size or settings.whisper_model
         self.device = device or settings.whisper_device
+        self.use_colab = settings.use_colab_gpu and settings.colab_api_url
+        self.model = None
         
-        logger.info(f"Loading Whisper model: {self.model_size} on {self.device}")
-        
-        # Load Whisper model
-        self.model = whisper.load_model(self.model_size, device=self.device)
-        
-        logger.info("Whisper model loaded successfully")
+        # Only load local model if NOT using Colab
+        if self.use_colab:
+            logger.info(f"Whisper will use Colab GPU: {settings.colab_api_url}")
+            logger.info(f"Model: {self.model_size} (loaded on Colab, not locally)")
+        else:
+            logger.info(f"Loading Whisper model locally: {self.model_size} on {self.device}")
+            self.model = whisper.load_model(self.model_size, device=self.device)
+            logger.info("Whisper model loaded successfully")
     
     def transcribe(self, 
                    audio_path: Path, 
@@ -51,8 +55,8 @@ class SpeechToText:
         Returns:
             Transcription result dictionary
         """
-        # Check if Colab GPU is enabled
-        if settings.use_colab_gpu and settings.colab_api_url:
+        # Check if Colab GPU is enabled - use it if available
+        if self.use_colab:
             return self._transcribe_colab(audio_path, language)
         
         try:
@@ -61,12 +65,18 @@ class SpeechToText:
             # Determine language
             lang = language if language and language != 'auto' else None
             
-            # Transcribe
+            # Optimized transcription parameters (matching Colab precision)
+            # These settings significantly improve accuracy, especially for non-English
             result = self.model.transcribe(
                 str(audio_path),
                 language=lang,
                 initial_prompt=initial_prompt,
-                verbose=False
+                verbose=False,
+                # Precision settings
+                temperature=0.0,              # Deterministic output, no randomness
+                word_timestamps=True,         # Get word-level timing
+                condition_on_previous_text=False,  # Prevents hallucination/repetition
+                fp16=(self.device == "cuda")  # FP16 for GPU only
             )
             
             logger.info(f"Transcription completed. Detected language: {result.get('language', 'unknown')}")
@@ -121,8 +131,17 @@ class SpeechToText:
         except Exception as e:
             logger.error(f"Failed to transcribe via Colab: {e}")
             logger.info("Falling back to local transcription...")
-            # Fallback to local if Colab fails
-            settings.use_colab_gpu = False
+            
+            # Disable Colab for this instance
+            self.use_colab = False
+            
+            # Load local model if not already loaded
+            if self.model is None:
+                logger.info(f"Loading Whisper model locally: {self.model_size} on {self.device}")
+                self.model = whisper.load_model(self.model_size, device=self.device)
+                logger.info("Whisper model loaded successfully")
+            
+            # Now transcribe locally
             return self.transcribe(audio_path, language)
     
     def transcribe_with_context(self,

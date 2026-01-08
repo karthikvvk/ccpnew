@@ -40,9 +40,13 @@ class Settings(BaseSettings):
     vector_db_path: Path = Path("./vector_db")
     embedding_model: str = "sentence-transformers/clip-ViT-B-32"
     
-    # TTS Settings
+    # TTS Settings (gTTS fallback)
     tts_slow: bool = False
     tts_lang: str = "en"
+    
+    # Voice Cloning Settings (XTTS-v2)
+    use_voice_cloning: bool = False  # True = use XTTS-v2, False = use gTTS
+    tts_device: str = "cpu"  # Device for XTTS-v2
     
     # Logging
     log_level: str = "INFO"

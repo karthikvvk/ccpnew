@@ -1,22 +1,27 @@
 """
-Flask server for Colab - GPU acceleration for Whisper and LLM only
-Everything else (translation, TTS, etc.) runs locally
+Flask server for Colab - GPU acceleration for Whisper and LLM
+Uses edge-tts for TTS (stable, high quality)
 
 Copy this entire code into a Colab cell and run it
 """
 
 CODE = """
 # Install dependencies
-!pip install -q flask flask-cors pyngrok openai-whisper transformers accelerate bitsandbytes sentencepiece
+!pip install -q flask flask-cors pyngrok
+!pip install -q openai-whisper
+!pip install -q transformers accelerate bitsandbytes sentencepiece
+!pip install -q edge-tts
 
 import os
-from flask import Flask, request, jsonify
+import asyncio
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import whisper
 import torch
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoModelForCausalLM
 from pyngrok import ngrok
 import tempfile
+import edge_tts
 
 app = Flask(__name__)
 CORS(app)
@@ -25,6 +30,20 @@ CORS(app)
 whisper_model = None
 refiner_model = None
 refiner_tokenizer = None
+
+# Edge TTS voices by language
+EDGE_VOICES = {
+    'en': 'en-US-AriaNeural',
+    'es': 'es-ES-AlvaroNeural',
+    'fr': 'fr-FR-DeniseNeural',
+    'de': 'de-DE-ConradNeural',
+    'it': 'it-IT-DiegoNeural',
+    'pt': 'pt-BR-FranciscaNeural',
+    'ja': 'ja-JP-NanamiNeural',
+    'ko': 'ko-KR-InJoonNeural',
+    'zh-cn': 'zh-CN-XiaoxiaoNeural',
+    'hi': 'hi-IN-MadhurNeural'
+}
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -36,6 +55,7 @@ def health():
         'refiner_loaded': refiner_model is not None
     })
 
+# ============ WHISPER ============
 @app.route('/load_whisper', methods=['POST'])
 def load_whisper():
     '''Load Whisper model on GPU'''
@@ -50,6 +70,43 @@ def load_whisper():
     
     return jsonify({'status': 'success', 'model': model_size})
 
+@app.route('/whisper/transcribe', methods=['POST'])
+def transcribe():
+    '''Transcribe audio using Whisper on GPU'''
+    global whisper_model
+    
+    if whisper_model is None:
+        return jsonify({'error': 'Call /load_whisper first'}), 400
+    
+    if 'audio' not in request.files:
+        return jsonify({'error': 'No audio file'}), 400
+    
+    audio_file = request.files['audio']
+    language = request.form.get('language', None)
+    
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as f:
+        audio_file.save(f.name)
+        temp_path = f.name
+    
+    try:
+        print("Transcribing with optimized settings...")
+        result = whisper_model.transcribe(
+            temp_path,
+            language=language if language != 'auto' else None,
+            verbose=False,
+            # Precision settings (critical for accuracy)
+            temperature=0.0,
+            word_timestamps=True,
+            condition_on_previous_text=False,
+            fp16=True
+        )
+        os.unlink(temp_path)
+        return jsonify({'status': 'success', 'result': result})
+    except Exception as e:
+        os.unlink(temp_path)
+        return jsonify({'error': str(e)}), 500
+
+# ============ LLM REFINER ============
 @app.route('/load_refiner', methods=['POST'])
 def load_refiner():
     '''Load LLM refiner (Flan-T5) on GPU'''
@@ -73,41 +130,10 @@ def load_refiner():
     
     return jsonify({'status': 'success', 'model': model_name})
 
-# Alias for compatibility
 @app.route('/load_llm', methods=['POST'])
 def load_llm():
+    '''Alias for load_refiner'''
     return load_refiner()
-
-@app.route('/whisper/transcribe', methods=['POST'])
-def transcribe():
-    '''Transcribe audio using Whisper on GPU'''
-    global whisper_model
-    
-    if whisper_model is None:
-        return jsonify({'error': 'Call /load_whisper first'}), 400
-    
-    if 'audio' not in request.files:
-        return jsonify({'error': 'No audio file'}), 400
-    
-    audio_file = request.files['audio']
-    language = request.form.get('language', None)
-    
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as f:
-        audio_file.save(f.name)
-        temp_path = f.name
-    
-    try:
-        print("Transcribing...")
-        result = whisper_model.transcribe(
-            temp_path,
-            language=language if language != 'auto' else None,
-            verbose=False
-        )
-        os.unlink(temp_path)
-        return jsonify({'status': 'success', 'result': result})
-    except Exception as e:
-        os.unlink(temp_path)
-        return jsonify({'error': str(e)}), 500
 
 @app.route('/llm/refine', methods=['POST'])
 def refine():
@@ -151,6 +177,32 @@ def refine():
     print("✅ Refinement complete!")
     return jsonify({'status': 'success', 'refined_segments': refined_segments})
 
+# ============ TTS (edge-tts) ============
+@app.route('/tts/generate', methods=['POST'])
+def generate_tts():
+    '''Generate speech using edge-tts'''
+    text = request.form.get('text', '')
+    language = request.form.get('language', 'en')
+    
+    if not text:
+        return jsonify({'error': 'No text provided'}), 400
+    
+    voice = EDGE_VOICES.get(language, 'en-US-AriaNeural')
+    
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as f:
+        output_path = f.name
+    
+    async def generate():
+        communicate = edge_tts.Communicate(text, voice)
+        await communicate.save(output_path)
+    
+    try:
+        print(f"Generating TTS: {text[:50]}...")
+        asyncio.run(generate())
+        return send_file(output_path, mimetype='audio/mpeg')
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 # Start server
 print("Starting ngrok tunnel...")
 public_url = ngrok.connect(5000)
@@ -163,22 +215,24 @@ print(f"  COLAB_API_URL={public_url}")
 print(f"  USE_COLAB_GPU=True")
 print(f"{'='*50}")
 print(f"\\nEndpoints:")
-print(f"  POST /load_whisper  - Load Whisper")
-print(f"  POST /load_refiner  - Load Flan-T5")
+print(f"  POST /load_whisper       - Load Whisper")
+print(f"  POST /load_refiner       - Load Flan-T5")
 print(f"  POST /whisper/transcribe - Transcribe audio")
-print(f"  POST /llm/refine - Fix sentences")
+print(f"  POST /llm/refine         - Fix sentences")
+print(f"  POST /tts/generate       - Generate speech")
 print(f"{'='*50}\\n")
 
 app.run(port=5000)
 """
 
 print("="*60)
-print("COLAB GPU SERVER - Whisper + LLM Refinement ONLY")
+print("COLAB GPU SERVER - Whisper + LLM + Edge-TTS")
 print("="*60)
-print("\\nThis server handles ONLY:")
+print("\\nThis server handles:")
 print("  1. Whisper transcription (GPU)")
 print("  2. LLM sentence refinement (GPU)")
-print("\\nTranslation, TTS, etc. run locally.")
+print("  3. Edge-TTS speech synthesis (stable, high quality)")
+print("\\nTranslation, video processing run locally.")
 print("="*60)
 print("\\nCopy below into a Colab cell:")
 print("="*60)

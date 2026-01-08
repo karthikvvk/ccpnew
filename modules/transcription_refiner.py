@@ -135,28 +135,48 @@ Fixed transcription: [/INST]"""
             return text
     
     def refine_segments(self, segments: List[Dict[str, Any]], 
-                       visual_context: str = None) -> List[Dict[str, Any]]:
+                       visual_context: str = None,
+                       source_language: str = "en") -> List[Dict[str, Any]]:
         """
         Refine multiple segments
         
         Args:
             segments: List of segments with 'text', 'start', 'end'
             visual_context: Optional visual context
+            source_language: Source language code (refinement only for English)
             
         Returns:
             List of refined segments
         """
+        # Flan-T5 only works well with English
+        # For non-English, skip refinement and pass through original text
+        if source_language and source_language.lower() not in ['en', 'english', 'auto']:
+            logger.info(f"Skipping LLM refinement for non-English ({source_language}) - using original Whisper output")
+            refined_segments = []
+            for segment in segments:
+                refined_segments.append({
+                    'start': segment['start'],
+                    'end': segment['end'],
+                    'original': segment['text'],
+                    'refined': segment['text']  # Pass through original
+                })
+            return refined_segments
+        
         # Use Colab GPU if enabled
         if self.use_colab:
             return self._refine_segments_colab(segments, visual_context)
         
-        # Local processing
+        # Local processing for English
         logger.info(f"Refining {len(segments)} segments locally on {self.device}")
         
         refined_segments = []
         
         for i, segment in enumerate(segments):
             refined_text = self.refine_text(segment['text'], visual_context)
+            
+            # If refinement returns empty, use original
+            if not refined_text.strip():
+                refined_text = segment['text']
             
             refined_segments.append({
                 'start': segment['start'],
@@ -217,6 +237,7 @@ Fixed transcription: [/INST]"""
             logger.error(f"Failed to refine via Colab: {e}")
             logger.info("Falling back to local refinement...")
             
-            # Fallback to local processing
+            # Disable Colab for this instance and retry locally
             self.use_colab = False
+            self._ensure_model_loaded()  # Make sure local model is loaded
             return self.refine_segments(segments, visual_context)
