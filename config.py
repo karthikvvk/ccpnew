@@ -56,6 +56,13 @@ class Settings(BaseSettings):
     use_colab_gpu: bool = False
     colab_api_url: str = ""
     
+    # Streaming Settings (Real-time audio capture)
+    streaming_enabled: bool = False
+    streaming_interval: float = 2.0  # seconds per chunk
+    streaming_buffer_size: int = 10  # max chunks in queue
+    streaming_sample_rate: int = 48000
+    streaming_channels: int = 1
+    
     # RAG configuration
     rag_enable_self_pruning: bool = False  # False=testing, True=production
     

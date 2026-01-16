@@ -11,6 +11,7 @@ CODE = """
 !pip install -q openai-whisper
 !pip install -q transformers accelerate bitsandbytes sentencepiece
 !pip install -q edge-tts
+!pip install -q TTS  # Coqui TTS with XTTS-v2
 
 import os
 import asyncio
@@ -30,6 +31,7 @@ CORS(app)
 whisper_model = None
 refiner_model = None
 refiner_tokenizer = None
+xtts_model = None  # XTTS-v2 for voice cloning
 
 # Edge TTS voices by language
 EDGE_VOICES = {
@@ -52,7 +54,8 @@ def health():
         'status': 'healthy',
         'gpu': torch.cuda.get_device_name(0) if torch.cuda.is_available() else "No GPU",
         'whisper_loaded': whisper_model is not None,
-        'refiner_loaded': refiner_model is not None
+        'refiner_loaded': refiner_model is not None,
+        'xtts_loaded': xtts_model is not None
     })
 
 # ============ WHISPER ============
@@ -177,10 +180,78 @@ def refine():
     print("✅ Refinement complete!")
     return jsonify({'status': 'success', 'refined_segments': refined_segments})
 
-# ============ TTS (edge-tts) ============
+# ============ XTTS-v2 Voice Cloning ============
+@app.route('/load_xtts', methods=['POST'])
+def load_xtts():
+    '''Load XTTS-v2 model on GPU for voice cloning'''
+    global xtts_model
+    
+    try:
+        from TTS.api import TTS
+        print("Loading XTTS-v2 on GPU (this may take a while)...")
+        xtts_model = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to("cuda")
+        print("✅ XTTS-v2 loaded!")
+        return jsonify({'status': 'success', 'model': 'xtts_v2'})
+    except Exception as e:
+        print(f"❌ XTTS-v2 loading failed: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/tts/clone', methods=['POST'])
+def clone_voice():
+    '''Generate speech with voice cloning using XTTS-v2'''
+    global xtts_model
+    
+    if xtts_model is None:
+        return jsonify({'error': 'Call /load_xtts first'}), 400
+    
+    text = request.form.get('text', '')
+    language = request.form.get('language', 'en')
+    
+    if not text:
+        return jsonify({'error': 'No text provided'}), 400
+    
+    if 'reference_audio' not in request.files:
+        return jsonify({'error': 'No reference audio provided'}), 400
+    
+    ref_audio = request.files['reference_audio']
+    
+    # Save reference audio temporarily
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as ref_f:
+        ref_audio.save(ref_f.name)
+        ref_path = ref_f.name
+    
+    # Output path
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as out_f:
+        output_path = out_f.name
+    
+    try:
+        print(f"Cloning voice for: {text[:50]}...")
+        
+        # Map language codes
+        xtts_lang = language
+        if language == 'ta' or language == 'te':
+            xtts_lang = 'hi'  # Fallback for unsupported languages
+        
+        xtts_model.tts_to_file(
+            text=text,
+            speaker_wav=ref_path,
+            language=xtts_lang,
+            file_path=output_path
+        )
+        
+        os.unlink(ref_path)
+        return send_file(output_path, mimetype='audio/wav')
+        
+    except Exception as e:
+        os.unlink(ref_path)
+        if os.path.exists(output_path):
+            os.unlink(output_path)
+        return jsonify({'error': str(e)}), 500
+
+# ============ TTS (edge-tts fallback) ============
 @app.route('/tts/generate', methods=['POST'])
 def generate_tts():
-    '''Generate speech using edge-tts'''
+    '''Generate speech using edge-tts (fallback, no cloning)'''
     text = request.form.get('text', '')
     language = request.form.get('language', 'en')
     
@@ -197,7 +268,7 @@ def generate_tts():
         await communicate.save(output_path)
     
     try:
-        print(f"Generating TTS: {text[:50]}...")
+        print(f"Generating edge-tts: {text[:50]}...")
         asyncio.run(generate())
         return send_file(output_path, mimetype='audio/mpeg')
     except Exception as e:
@@ -213,13 +284,16 @@ print(f"URL: {public_url}")
 print(f"\\nSet in your local .env:")
 print(f"  COLAB_API_URL={public_url}")
 print(f"  USE_COLAB_GPU=True")
+print(f"  USE_VOICE_CLONING=True  # Enable voice cloning")
 print(f"{'='*50}")
 print(f"\\nEndpoints:")
 print(f"  POST /load_whisper       - Load Whisper")
 print(f"  POST /load_refiner       - Load Flan-T5")
+print(f"  POST /load_xtts          - Load XTTS-v2 (voice cloning)")
 print(f"  POST /whisper/transcribe - Transcribe audio")
 print(f"  POST /llm/refine         - Fix sentences")
-print(f"  POST /tts/generate       - Generate speech")
+print(f"  POST /tts/clone          - Voice cloning (XTTS-v2)")
+print(f"  POST /tts/generate       - Edge-TTS (fallback)")
 print(f"{'='*50}\\n")
 
 app.run(port=5000)

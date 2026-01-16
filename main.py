@@ -4,6 +4,7 @@ FastAPI application entry point
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.endpoints import router
+from api.streaming import router as streaming_router
 from models.schemas import HealthResponse
 from config import settings
 from utils.logger import setup_logger
@@ -28,6 +29,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(router, prefix="/api/v1", tags=["translation"])
+app.include_router(streaming_router, prefix="/api/v1", tags=["streaming"])
 
 
 @app.get("/", response_model=HealthResponse)
