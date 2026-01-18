@@ -1,29 +1,149 @@
 """
-Translation module using deep-translator (more reliable than googletrans)
+Translation module using Facebook's NLLB-200-1.3B model (GPU-accelerated)
 """
-from deep_translator import GoogleTranslator
+import torch
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from typing import List, Dict, Any
 from pathlib import Path
 import json
 from utils.logger import setup_logger
+from config import settings
 
 logger = setup_logger("translator")
 
 
+# NLLB-200 language code mapping (BCP-47 format)
+NLLB_LANG_CODES = {
+    # European languages
+    'english': 'eng_Latn',
+    'spanish': 'spa_Latn',
+    'french': 'fra_Latn',
+    'german': 'deu_Latn',
+    'italian': 'ita_Latn',
+    'portuguese': 'por_Latn',
+    'dutch': 'nld_Latn',
+    'polish': 'pol_Latn',
+    'russian': 'rus_Cyrl',
+    'ukrainian': 'ukr_Cyrl',
+    'greek': 'ell_Grek',
+    'turkish': 'tur_Latn',
+    
+    # Asian languages
+    'japanese': 'jpn_Jpan',
+    'korean': 'kor_Hang',
+    'chinese': 'zho_Hans',
+    'chinese_traditional': 'zho_Hant',
+    'vietnamese': 'vie_Latn',
+    'thai': 'tha_Thai',
+    'indonesian': 'ind_Latn',
+    'malay': 'zsm_Latn',
+    
+    # South Asian languages
+    'hindi': 'hin_Deva',
+    'tamil': 'tam_Taml',
+    'telugu': 'tel_Telu',
+    'bengali': 'ben_Beng',
+    'marathi': 'mar_Deva',
+    'gujarati': 'guj_Gujr',
+    'kannada': 'kan_Knda',
+    'malayalam': 'mal_Mlym',
+    'punjabi': 'pan_Guru',
+    'urdu': 'urd_Arab',
+    
+    # Middle Eastern languages
+    'arabic': 'arb_Arab',
+    'hebrew': 'heb_Hebr',
+    'persian': 'pes_Arab',
+    
+    # African languages
+    'swahili': 'swh_Latn',
+    'amharic': 'amh_Ethi',
+}
+
+
 class Translator:
-    """Simple translator using Google Translate via deep-translator"""
+    """Translator using Facebook's NLLB-200-1.3B model (GPU-accelerated)"""
+    
+    _instance = None
+    _model = None
+    _tokenizer = None
+    
+    def __new__(cls):
+        """Singleton pattern to avoid loading model multiple times"""
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
     
     def __init__(self):
-        """Initialize translator"""
-        logger.info("Google Translator initialized (deep-translator)")
+        """Initialize NLLB translator on GPU"""
+        if Translator._model is not None:
+            return  # Already initialized
+            
+        self.model_name = settings.translation_model
+        self.device = settings.translation_device
+        self.max_length = settings.translation_max_length
+        
+        logger.info(f"Loading NLLB model: {self.model_name} on {self.device}")
+        
+        try:
+            Translator._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+            Translator._model = AutoModelForSeq2SeqLM.from_pretrained(
+                self.model_name,
+                torch_dtype=torch.float16 if self.device == "cuda" else torch.float32
+            ).to(self.device)
+            
+            # Set model to eval mode
+            Translator._model.eval()
+            
+            logger.info(f"NLLB Translator initialized successfully on {self.device}")
+            
+            # Warm up the model
+            self._warmup()
+            
+        except Exception as e:
+            logger.error(f"Failed to load NLLB model: {e}")
+            raise
     
-    def translate_text(self, text: str, target_language: str) -> str:
+    @property
+    def tokenizer(self):
+        return Translator._tokenizer
+    
+    @property
+    def model(self):
+        return Translator._model
+    
+    def _warmup(self):
+        """Warm up the model with a simple translation"""
+        try:
+            logger.info("Warming up NLLB model...")
+            self.translate_text("Hello", "english", "spanish")
+            logger.info("Model warmup complete")
+        except Exception as e:
+            logger.warning(f"Model warmup failed: {e}")
+    
+    def _get_nllb_code(self, language: str) -> str:
+        """Convert language name to NLLB code"""
+        lang_lower = language.lower().strip()
+        
+        if lang_lower in NLLB_LANG_CODES:
+            return NLLB_LANG_CODES[lang_lower]
+        
+        # Check if it's already an NLLB code
+        if '_' in lang_lower and len(lang_lower) == 8:
+            return lang_lower
+        
+        # Default to English
+        logger.warning(f"Unknown language '{language}', defaulting to English")
+        return 'eng_Latn'
+    
+    def translate_text(self, text: str, source_language: str, target_language: str) -> str:
         """
-        Translate text to target language
+        Translate text using NLLB-200
         
         Args:
             text: Text to translate
-            target_language: Target language (e.g., 'Spanish', 'French')
+            source_language: Source language (e.g., 'english', 'tamil')
+            target_language: Target language (e.g., 'spanish', 'french')
             
         Returns:
             Translated text
@@ -32,49 +152,64 @@ class Translator:
             if not text or not text.strip():
                 return text
             
-            # Map language names to codes
-            lang_map = {
-                'spanish': 'es',
-                'french': 'fr',
-                'german': 'de',
-                'italian': 'it',
-                'portuguese': 'pt',
-                'russian': 'ru',
-                'japanese': 'ja',
-                'korean': 'ko',
-                'chinese': 'zh-CN',
-                'arabic': 'ar',
-                'hindi': 'hi',
-                'english': 'en',
-                'tamil': 'ta',
-                'telugu': 'te',
-                'bengali': 'bn'
-            }
+            src_code = self._get_nllb_code(source_language)
+            tgt_code = self._get_nllb_code(target_language)
             
-            dest_lang = lang_map.get(target_language.lower(), 'en')
+            # Set source language for tokenizer
+            self.tokenizer.src_lang = src_code
             
-            # Use deep-translator
-            translator = GoogleTranslator(source='auto', target=dest_lang)
-            result = translator.translate(text)
-            return result if result else text
+            # Tokenize input
+            inputs = self.tokenizer(
+                text, 
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=self.max_length
+            ).to(self.device)
+            
+            # Generate translation
+            with torch.no_grad():
+                generated_tokens = self.model.generate(
+                    **inputs,
+                    forced_bos_token_id=self.tokenizer.convert_tokens_to_ids(tgt_code),
+                    max_length=self.max_length,
+                    num_beams=5,
+                    length_penalty=1.0,
+                    early_stopping=True
+                )
+            
+            # Decode output
+            translated = self.tokenizer.batch_decode(
+                generated_tokens, 
+                skip_special_tokens=True
+            )[0]
+            
+            return translated
             
         except Exception as e:
             logger.error(f"Translation failed: {e}")
             return text  # Return original if translation fails
     
     def translate_segments(self, segments: List[Dict[str, Any]], 
-                          target_language: str) -> List[Dict[str, Any]]:
+                          target_language: str,
+                          source_language: str = "auto") -> List[Dict[str, Any]]:
         """
         Translate segments
         
         Args:
-            segments: List of segments with 'refined' text
+            segments: List of segments with 'refined' or 'text' content
             target_language: Target language
+            source_language: Source language (default: auto-detect from first segment)
             
         Returns:
             List of translated segments
         """
         logger.info(f"Translating {len(segments)} segments to {target_language}")
+        
+        # If source is auto, try to detect from content or default to English
+        if source_language == "auto":
+            source_language = "english"  # Default assumption
+            logger.info(f"Source language set to: {source_language}")
         
         translated_segments = []
         
@@ -82,7 +217,11 @@ class Translator:
             # Use refined text if available, otherwise original
             text_to_translate = segment.get('refined', segment.get('text', ''))
             
-            translated_text = self.translate_text(text_to_translate, target_language)
+            translated_text = self.translate_text(
+                text_to_translate, 
+                source_language, 
+                target_language
+            )
             
             translated_segments.append({
                 'start': segment['start'],

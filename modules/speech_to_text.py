@@ -1,6 +1,5 @@
 """
-Speech-to-text module using local Whisper
-Can run locally (CPU) or in Colab (GPU) for faster processing
+Speech-to-text module using Whisper (GPU-accelerated)
 """
 import whisper
 import json
@@ -15,7 +14,7 @@ logger = setup_logger("speech_to_text")
 
 class SpeechToText:
     """
-    Whisper-based speech recognition with RAG context enhancement
+    Whisper-based speech recognition with RAG context enhancement (GPU-only)
     """
     
     def __init__(self, model_size: str = None, device: str = None):
@@ -24,21 +23,15 @@ class SpeechToText:
         
         Args:
             model_size: Whisper model size (tiny, base, small, medium, large, large-v3)
-            device: Device to run on ('cpu' or 'cuda')
+            device: Device to run on ('cuda')
         """
         self.model_size = model_size or settings.whisper_model
         self.device = device or settings.whisper_device
-        self.use_colab = settings.use_colab_gpu and settings.colab_api_url
         self.model = None
         
-        # Only load local model if NOT using Colab
-        if self.use_colab:
-            logger.info(f"Whisper will use Colab GPU: {settings.colab_api_url}")
-            logger.info(f"Model: {self.model_size} (loaded on Colab, not locally)")
-        else:
-            logger.info(f"Loading Whisper model locally: {self.model_size} on {self.device}")
-            self.model = whisper.load_model(self.model_size, device=self.device)
-            logger.info("Whisper model loaded successfully")
+        logger.info(f"Loading Whisper model: {self.model_size} on {self.device}")
+        self.model = whisper.load_model(self.model_size, device=self.device)
+        logger.info("Whisper model loaded successfully")
     
     def transcribe(self, 
                    audio_path: Path, 
@@ -55,28 +48,23 @@ class SpeechToText:
         Returns:
             Transcription result dictionary
         """
-        # Check if Colab GPU is enabled - use it if available
-        if self.use_colab:
-            return self._transcribe_colab(audio_path, language)
-        
         try:
             logger.info(f"Transcribing audio: {audio_path}")
             
             # Determine language
             lang = language if language and language != 'auto' else None
             
-            # Optimized transcription parameters (matching Colab precision)
-            # These settings significantly improve accuracy, especially for non-English
+            # Optimized transcription parameters
             result = self.model.transcribe(
                 str(audio_path),
                 language=lang,
                 initial_prompt=initial_prompt,
                 verbose=False,
                 # Precision settings
-                temperature=0.0,              # Deterministic output, no randomness
+                temperature=0.0,              # Deterministic output
                 word_timestamps=True,         # Get word-level timing
-                condition_on_previous_text=False,  # Prevents hallucination/repetition
-                fp16=(self.device == "cuda")  # FP16 for GPU only
+                condition_on_previous_text=False,  # Prevents hallucination
+                fp16=(self.device == "cuda")  # FP16 for GPU
             )
             
             logger.info(f"Transcription completed. Detected language: {result.get('language', 'unknown')}")
@@ -87,62 +75,6 @@ class SpeechToText:
         except Exception as e:
             logger.error(f"Failed to transcribe audio: {e}")
             raise
-    
-    def _transcribe_colab(self, audio_path: Path, language: str = None) -> Dict[str, Any]:
-        """
-        Transcribe using Colab GPU API
-        
-        Args:
-            audio_path: Path to audio file
-            language: Language code or None
-            
-        Returns:
-            Transcription result
-        """
-        import requests
-        
-        try:
-            logger.info(f"Transcribing via Colab GPU: {audio_path}")
-            
-            # First, ensure Whisper model is loaded on Colab
-            load_url = f"{settings.colab_api_url}/load_whisper"
-            load_response = requests.post(load_url, json={'model_size': self.model_size})
-            
-            if load_response.status_code == 200:
-                logger.info("Whisper model loaded on Colab GPU")
-            
-            # Send audio for transcription
-            url = f"{settings.colab_api_url}/whisper/transcribe"
-            
-            with open(audio_path, 'rb') as f:
-                files = {'audio': f}
-                data = {'language': language or 'auto'}
-                
-                response = requests.post(url, files=files, data=data, timeout=600)
-            
-            if response.status_code == 200:
-                result = response.json()['result']
-                logger.info(f"Colab transcription completed. Language: {result.get('language', 'unknown')}")
-                return result
-            else:
-                logger.error(f"Colab API error: {response.text}")
-                raise Exception(f"Colab API failed: {response.text}")
-                
-        except Exception as e:
-            logger.error(f"Failed to transcribe via Colab: {e}")
-            logger.info("Falling back to local transcription...")
-            
-            # Disable Colab for this instance
-            self.use_colab = False
-            
-            # Load local model if not already loaded
-            if self.model is None:
-                logger.info(f"Loading Whisper model locally: {self.model_size} on {self.device}")
-                self.model = whisper.load_model(self.model_size, device=self.device)
-                logger.info("Whisper model loaded successfully")
-            
-            # Now transcribe locally
-            return self.transcribe(audio_path, language)
     
     def transcribe_with_context(self,
                                audio_path: Path,
@@ -162,7 +94,7 @@ class SpeechToText:
         # Use visual context as initial prompt
         initial_prompt = None
         if visual_context:
-            initial_prompt = f"Visual context: {visual_context[:200]}"  # Limit length
+            initial_prompt = f"Visual context: {visual_context[:200]}"
             logger.info(f"Using visual context for transcription")
         
         return self.transcribe(audio_path, language, initial_prompt)
@@ -219,7 +151,6 @@ class SpeechToText:
         return segments
 
 
-# Standalone function for Colab usage
 def transcribe_audio_gpu(audio_path: str,
                         output_json: str,
                         output_txt: str,
@@ -227,7 +158,7 @@ def transcribe_audio_gpu(audio_path: str,
                         language: str = None,
                         device: str = "cuda") -> dict:
     """
-    Transcribe audio using GPU - Colab compatible
+    Standalone transcription function for GPU
     
     Args:
         audio_path: Path to audio file

@@ -1,0 +1,52 @@
+{
+  "app": {
+    "name": "VideoTranslationAPI",
+    "debug": true,
+    "host": "0.0.0.0",
+    "port": 8000
+  },
+  "storage": {
+    "output_dir": "./outputs",
+    "upload_dir": "./uploads",
+    "max_file_size": 1073741824
+  },
+  "video": {
+    "frame_extract_fps": 2,
+    "video_codec": "libx264",
+    "audio_codec": "aac"
+  },
+  "whisper": {
+    "model": "medium",
+    "device": "cuda",
+    "language": "auto"
+  },
+  "translation": {
+    "model": "facebook/nllb-200-1.3B",
+    "device": "cuda",
+    "max_length": 256
+  },
+  "vector_db": {
+    "path": "./vector_db",
+    "embedding_model": "sentence-transformers/clip-ViT-B-32"
+  },
+  "tts": {
+    "slow": false,
+    "lang": "en",
+    "use_voice_cloning": false,
+    "device": "cuda"
+  },
+  "logging": {
+    "level": "INFO",
+    "file": "./logs/app.log"
+  },
+  "streaming": {
+    "enabled": false,
+    "interval": 2.0,
+    "buffer_size": 10,
+    "sample_rate": 48000,
+    "channels": 1
+  },
+  "rag": {
+    "enable_self_pruning": false
+  }
+}

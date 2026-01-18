@@ -1,11 +1,10 @@
 """
 Audio Streaming Module
-Captures device audio and provides real-time transcription
+Captures device audio and provides real-time transcription (GPU-only)
 
 Supports:
 - Local mode: Direct object access
 - Tunnel mode: FastAPI server with endpoints
-- Colab GPU offloading for Whisper
 
 Based on streaming/streamer.py and streaming/simple.py
 """
@@ -229,7 +228,7 @@ class AudioStreamer:
 
 class LiveTranscriber:
     """
-    Real-time audio transcription using Whisper.
+    Real-time audio transcription using Whisper (GPU-only).
     
     Usage:
         transcriber = LiveTranscriber()
@@ -249,22 +248,17 @@ class LiveTranscriber:
         
         Args:
             model_size: Whisper model size
-            device: Device ('cpu' or 'cuda')
+            device: Device ('cuda')
         """
         self.model_size = model_size or settings.whisper_model
         self.device = device or settings.whisper_device
-        self.use_colab = settings.use_colab_gpu and settings.colab_api_url
-        
         self.model = None
         
-        if self.use_colab:
-            logger.info(f"LiveTranscriber will use Colab GPU: {settings.colab_api_url}")
-        else:
-            logger.info(f"LiveTranscriber initialized: {self.model_size} on {self.device}")
+        logger.info(f"LiveTranscriber initialized: {self.model_size} on {self.device}")
     
     def _ensure_model_loaded(self):
         """Lazy load Whisper model."""
-        if self.use_colab or self.model is not None:
+        if self.model is not None:
             return
         
         import whisper
@@ -301,9 +295,6 @@ class LiveTranscriber:
         # Resample to 16kHz
         audio_16k = self.resample(audio, source_rate)
         
-        if self.use_colab:
-            return self._transcribe_colab(audio_16k, language)
-        
         self._ensure_model_loaded()
         
         result = self.model.transcribe(
@@ -319,49 +310,6 @@ class LiveTranscriber:
             'segments': result.get('segments', []),
             'language': result.get('language', '')
         }
-    
-    def _transcribe_colab(self, audio: np.ndarray, language: str = None) -> Dict[str, Any]:
-        """Transcribe via Colab GPU."""
-        import requests
-        
-        try:
-            # Save audio to temp file
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
-                temp_path = f.name
-                sf.write(temp_path, audio, self.WHISPER_SAMPLE_RATE)
-            
-            # Load model on Colab if needed
-            load_url = f"{settings.colab_api_url}/load_whisper"
-            requests.post(load_url, json={'model_size': self.model_size}, timeout=60)
-            
-            # Transcribe
-            url = f"{settings.colab_api_url}/whisper/transcribe"
-            with open(temp_path, 'rb') as f:
-                response = requests.post(
-                    url, 
-                    files={'audio': f}, 
-                    data={'language': language or 'auto'},
-                    timeout=120
-                )
-            
-            os.unlink(temp_path)
-            
-            if response.status_code == 200:
-                result = response.json().get('result', {})
-                return {
-                    'text': result.get('text', '').strip(),
-                    'segments': result.get('segments', []),
-                    'language': result.get('language', '')
-                }
-            else:
-                raise Exception(f"Colab API error: {response.text}")
-                
-        except Exception as e:
-            logger.error(f"Colab transcription failed: {e}")
-            # Fallback to local
-            self.use_colab = False
-            self._ensure_model_loaded()
-            return self.transcribe(audio, self.WHISPER_SAMPLE_RATE, language)
     
     def transcribe_file(self, filepath: Path) -> Dict[str, Any]:
         """Transcribe audio file."""

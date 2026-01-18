@@ -1,6 +1,5 @@
 """
-RAG context module for generating visual context from frames
-This module can be run locally or adapted for Colab with GPU
+RAG context module for generating visual context from frames (GPU-only)
 """
 import json
 from pathlib import Path
@@ -16,8 +15,7 @@ logger = setup_logger("rag_context")
 
 class RAGContext:
     """
-    Generate textual descriptions from frames using vision-language model
-    Can run locally (CPU) or in Colab (GPU)
+    Generate textual descriptions from frames using vision-language model (GPU-only)
     """
     
     def __init__(self, model_name: str = "microsoft/git-base", device: str = None):
@@ -154,13 +152,13 @@ class RAGContext:
         return output_path
 
 
-# Standalone function for Colab usage
+# Standalone function for GPU batch processing
 def describe_frames_batch(frame_dir: str, 
                          output_json: str,
                          model_name: str = "microsoft/git-base",
                          device: str = "cuda"):
     """
-    Batch process frames for descriptions - Colab compatible
+    Batch process frames for descriptions (GPU-accelerated)
     
     Args:
         frame_dir: Directory containing frames

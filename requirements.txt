@@ -1,26 +1,41 @@
+# Core API
 fastapi
 uvicorn[standard]
-pydantic-settings
+python-multipart
+aiofiles
+
+# Configuration
+pydantic
+
+# Media Processing
 ffmpeg-python
 opencv-python
 pydub
 librosa
 soundfile
+Pillow
+
+# Speech-to-Text (Whisper)
 openai-whisper
-numpy<2.0
-chromadb
-sentence-transformers
+
+# Translation (NLLB-200)
 transformers
 sentencepiece
 accelerate
-bitsandbytes
-Pillow
-python-dotenv
-aiofiles
-googletrans==4.0.0rc1
-deep-translator
+torch
+numpy<2.0
+
+# Vector Database (RAG)
+chromadb
+sentence-transformers
+
+# Text-to-Speech
 gtts
 edge-tts
-python-multipart
+
+# Audio Streaming
 sounddevice
 scipy
+
+# Logging
+python-dotenv

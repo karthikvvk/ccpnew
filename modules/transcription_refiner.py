@@ -1,11 +1,8 @@
 """
 Transcription refiner using LLM to fix/improve Whisper output
-The LLM corrects grammar, fills gaps, and makes sentences complete
-
-Supports both local CPU/GPU and Colab GPU via USE_COLAB_GPU setting
+The LLM corrects grammar, fills gaps, and makes sentences complete (GPU-only)
 """
 import json
-import requests
 from pathlib import Path
 from typing import Dict, List, Any
 import torch
@@ -19,11 +16,7 @@ logger = setup_logger("refiner")
 class TranscriptionRefiner:
     """
     Uses LLM to refine and improve Whisper transcriptions
-    Fixes grammar, completes sentences, fills gaps
-    
-    Supports:
-    - Local CPU/GPU processing
-    - Colab GPU processing (when USE_COLAB_GPU=True)
+    Fixes grammar, completes sentences, fills gaps (GPU-only)
     """
     
     def __init__(self, model_name: str = None, device: str = None):
@@ -32,26 +25,19 @@ class TranscriptionRefiner:
         
         Args:
             model_name: LLM model to use
-            device: Device to run on ('cpu' or 'cuda')
+            device: Device to run on ('cuda')
         """
         self.model_name = model_name or settings.llm_model
         self.device = device or settings.llm_device
-        self.use_colab = settings.use_colab_gpu and settings.colab_api_url
         
-        # Lazy load for local processing
+        # Lazy load for processing
         self.model = None
         self.tokenizer = None
         
-        if self.use_colab:
-            logger.info(f"Refiner initialized with Colab GPU: {settings.colab_api_url}")
-        else:
-            logger.info(f"Refiner initialized with model: {self.model_name} on {self.device}")
+        logger.info(f"Refiner initialized with model: {self.model_name} on {self.device}")
     
     def _ensure_model_loaded(self):
-        """Lazy load model for local processing"""
-        if self.use_colab:
-            return  # Skip local loading when using Colab
-            
+        """Lazy load model for processing"""
         if self.model is not None and self.tokenizer is not None:
             return
         
@@ -112,7 +98,7 @@ Fixed transcription: [/INST]"""
             with torch.no_grad():
                 outputs = self.model.generate(
                     **inputs,
-                    max_new_tokens=settings.llm_max_length,
+                    max_new_tokens=settings.translation_max_length,
                     temperature=0.3,
                     do_sample=True,
                     pad_token_id=self.tokenizer.eos_token_id if hasattr(self.tokenizer, 'eos_token_id') else 0
@@ -162,10 +148,6 @@ Fixed transcription: [/INST]"""
                 })
             return refined_segments
         
-        # Use Colab GPU if enabled
-        if self.use_colab:
-            return self._refine_segments_colab(segments, visual_context)
-        
         # Local processing for English
         logger.info(f"Refining {len(segments)} segments locally on {self.device}")
         
@@ -190,54 +172,3 @@ Fixed transcription: [/INST]"""
         
         logger.info(f"Refinement completed for all {len(segments)} segments")
         return refined_segments
-    
-    def _refine_segments_colab(self, segments: List[Dict[str, Any]], 
-                               visual_context: str = None) -> List[Dict[str, Any]]:
-        """
-        Refine segments using Colab GPU
-        
-        Args:
-            segments: List of segments
-            visual_context: Optional visual context
-            
-        Returns:
-            List of refined segments
-        """
-        try:
-            logger.info(f"Refining {len(segments)} segments via Colab GPU")
-            
-            # First, ensure refiner model is loaded on Colab
-            load_url = f"{settings.colab_api_url}/load_refiner"
-            load_response = requests.post(load_url, json={'model_name': self.model_name}, timeout=300)
-            
-            if load_response.status_code == 200:
-                logger.info("Refiner model loaded on Colab GPU")
-            else:
-                logger.warning(f"Failed to load refiner on Colab: {load_response.text}")
-            
-            # Send segments for refinement
-            url = f"{settings.colab_api_url}/llm/refine"
-            
-            payload = {
-                'segments': segments,
-                'visual_context': visual_context
-            }
-            
-            response = requests.post(url, json=payload, timeout=1800)  # 30 min timeout
-            
-            if response.status_code == 200:
-                refined = response.json().get('refined_segments', [])
-                logger.info(f"Colab refinement completed for {len(refined)} segments")
-                return refined
-            else:
-                logger.error(f"Colab API error: {response.text}")
-                raise Exception(f"Colab API failed: {response.text}")
-                
-        except Exception as e:
-            logger.error(f"Failed to refine via Colab: {e}")
-            logger.info("Falling back to local refinement...")
-            
-            # Disable Colab for this instance and retry locally
-            self.use_colab = False
-            self._ensure_model_loaded()  # Make sure local model is loaded
-            return self.refine_segments(segments, visual_context)
