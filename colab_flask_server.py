@@ -109,34 +109,24 @@ def transcribe():
         os.unlink(temp_path)
         return jsonify({'error': str(e)}), 500
 
-# ============ LLM REFINER ============
+# ============ LLM (NLLB-200) ============
 @app.route('/load_refiner', methods=['POST'])
-def load_refiner():
-    '''Load LLM refiner (Flan-T5) on GPU'''
+@app.route('/load_llm', methods=['POST'])
+def load_llm():
+    '''Load NLLB-200 model on GPU for translation'''
     global refiner_model, refiner_tokenizer
     
     data = request.json or {}
-    model_name = data.get('model_name', 'google/flan-t5-large')
+    model_name = data.get('model_name', 'facebook/nllb-200-1.3B')
     
     print(f"Loading {model_name} on GPU...")
     refiner_tokenizer = AutoTokenizer.from_pretrained(model_name)
-    
-    if 't5' in model_name.lower() or 'flan' in model_name.lower():
-        refiner_model = AutoModelForSeq2SeqLM.from_pretrained(
-            model_name, torch_dtype=torch.float16, device_map="auto"
-        )
-    else:
-        refiner_model = AutoModelForCausalLM.from_pretrained(
-            model_name, torch_dtype=torch.float16, device_map="auto", load_in_8bit=True
-        )
-    print("✅ Refiner loaded!")
+    refiner_model = AutoModelForSeq2SeqLM.from_pretrained(
+        model_name, torch_dtype=torch.float16, device_map="auto"
+    )
+    print("✅ LLM loaded!")
     
     return jsonify({'status': 'success', 'model': model_name})
-
-@app.route('/load_llm', methods=['POST'])
-def load_llm():
-    '''Alias for load_refiner'''
-    return load_refiner()
 
 @app.route('/llm/refine', methods=['POST'])
 def refine():
@@ -179,6 +169,114 @@ def refine():
     
     print("✅ Refinement complete!")
     return jsonify({'status': 'success', 'refined_segments': refined_segments})
+
+# ============ NLLB TRANSLATOR ============
+translator_model = None
+translator_tokenizer = None
+
+@app.route('/load_translator', methods=['POST'])
+def load_translator():
+    '''Load NLLB-200 translator on GPU'''
+    global translator_model, translator_tokenizer
+    
+    data = request.json or {}
+    model_name = data.get('model_name', 'facebook/nllb-200-distilled-600M')
+    
+    print(f"Loading NLLB translator: {model_name} on GPU...")
+    translator_tokenizer = AutoTokenizer.from_pretrained(model_name)
+    translator_model = AutoModelForSeq2SeqLM.from_pretrained(
+        model_name, torch_dtype=torch.float16, device_map="auto"
+    )
+    print("✅ NLLB Translator loaded!")
+    
+    return jsonify({'status': 'success', 'model': model_name})
+
+@app.route('/llm/translate', methods=['POST'])
+def translate():
+    '''Translate text using NLLB-200 on GPU'''
+    global translator_model, translator_tokenizer
+    
+    if translator_model is None:
+        return jsonify({'error': 'Call /load_translator first'}), 400
+    
+    data = request.json
+    text = data.get('text', '')
+    source_lang = data.get('source_lang', 'tam_Taml')
+    target_lang = data.get('target_lang', 'eng_Latn')
+    
+    if not text:
+        return jsonify({'error': 'No text provided'}), 400
+    
+    try:
+        translator_tokenizer.src_lang = source_lang
+        
+        inputs = translator_tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512).to("cuda")
+        
+        translated_tokens = translator_model.generate(
+            **inputs,
+            forced_bos_token_id=translator_tokenizer.lang_code_to_id[target_lang],
+            max_length=512,
+            num_beams=5,
+            early_stopping=True
+        )
+        
+        translated = translator_tokenizer.decode(translated_tokens[0], skip_special_tokens=True)
+        
+        return jsonify({'status': 'success', 'translated': translated.strip()})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/llm/translate_segments', methods=['POST'])
+def translate_segments():
+    '''Translate multiple segments using NLLB-200 on GPU'''
+    global translator_model, translator_tokenizer
+    
+    if translator_model is None:
+        return jsonify({'error': 'Call /load_translator first'}), 400
+    
+    data = request.json
+    segments = data.get('segments', [])
+    source_lang = data.get('source_lang', 'tam_Taml')
+    target_lang = data.get('target_lang', 'eng_Latn')
+    
+    print(f"Translating {len(segments)} segments: {source_lang} → {target_lang}")
+    translator_tokenizer.src_lang = source_lang
+    
+    translated_segments = []
+    
+    for i, seg in enumerate(segments):
+        text = seg.get('refined') or seg.get('text') or seg.get('original', '')
+        
+        if not text.strip():
+            translated = ""
+        else:
+            try:
+                inputs = translator_tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512).to("cuda")
+                translated_tokens = translator_model.generate(
+                    **inputs,
+                    forced_bos_token_id=translator_tokenizer.lang_code_to_id[target_lang],
+                    max_length=512,
+                    num_beams=5,
+                    early_stopping=True
+                )
+                translated = translator_tokenizer.decode(translated_tokens[0], skip_special_tokens=True)
+            except Exception as e:
+                print(f"  Segment {i+1} failed: {e}")
+                translated = text  # Fallback to original
+        
+        translated_segments.append({
+            'start': seg.get('start', 0),
+            'end': seg.get('end', 0),
+            'original': seg.get('original', text),
+            'refined': seg.get('refined', text),
+            'translated': translated.strip()
+        })
+        
+        if (i + 1) % 5 == 0:
+            print(f"  {i + 1}/{len(segments)} translated")
+    
+    print("✅ Translation complete!")
+    return jsonify({'status': 'success', 'translated_segments': translated_segments})
 
 # ============ XTTS-v2 Voice Cloning ============
 @app.route('/load_xtts', methods=['POST'])

@@ -1,6 +1,6 @@
 """
 Main orchestration pipeline for video translation
-NEW FLOW: Whisper → LLM Refiner → Google Translate → TTS
+NEW FLOW: Whisper → LLM Refiner → LLM Translate (NLLB-200) → TTS
 WITH: Semantic RAG (self-pruning)
 """
 from pathlib import Path
@@ -176,15 +176,18 @@ class TranslationPipeline:
             
             logger.info(f"Refined transcription saved")
             
-            # Step 7: Translate refined text with Google Translate
-            logger.info(f"Step 7/9: Translating to {target_language} with Google Translate...")
+            # Step 7: Translate refined text with NLLB-200
+            logger.info(f"Step 7/9: Translating to {target_language} with NLLB-200...")
             translator = Translator()
-            translated_segments = translator.translate_segments(refined_segments, target_language)
-            
-            # Save translation
+            translated_segments = translator.translate_segments(
+                refined_segments, 
+                source_lang=detected_language,
+                target_lang=target_language
+            )
             transl_json_path = self.file_manager.get_path('translation_json')
             transl_txt_path = self.file_manager.get_path('translation_txt')
             translator.save_translation(translated_segments, transl_json_path, transl_txt_path)
+            
             self.file_manager.track_file('translation_json', transl_json_path)
             self.file_manager.track_file('translation_txt', transl_txt_path)
             

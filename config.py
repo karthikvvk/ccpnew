@@ -30,11 +30,10 @@ class Settings(BaseSettings):
     whisper_device: str = "cpu"
     whisper_language: str = "auto"
     
-    # LLM Settings (Flan-T5-Large: CPU-optimized for sentence completion)
-    llm_model: str = "google/flan-t5-large"
+    # LLM Settings (NLLB-200: Multilingual translation + context understanding)
+    llm_model: str = "facebook/nllb-200-1.3B"
     llm_device: str = "cpu"
-    llm_max_length: int = 512  # T5 works better with shorter outputs
-    llm_temperature: float = 0.3  # Lower temperature for more deterministic refinement
+    llm_max_length: int = 256
     
     # Vector Database
     vector_db_path: Path = Path("./vector_db")
