@@ -1,9 +1,10 @@
 """
-Translation module using Facebook's NLLB-200-1.3B model (GPU-accelerated)
+Context-aware translation module using Llama-3.1-8B-Instruct
+Uses RAG context for domain-specific translation accuracy
 """
 import torch
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-from typing import List, Dict, Any
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+from typing import List, Dict, Any, Optional
 from pathlib import Path
 import json
 from utils.logger import setup_logger
@@ -12,57 +13,11 @@ from config import settings
 logger = setup_logger("translator")
 
 
-# NLLB-200 language code mapping (BCP-47 format)
-NLLB_LANG_CODES = {
-    # European languages
-    'english': 'eng_Latn',
-    'spanish': 'spa_Latn',
-    'french': 'fra_Latn',
-    'german': 'deu_Latn',
-    'italian': 'ita_Latn',
-    'portuguese': 'por_Latn',
-    'dutch': 'nld_Latn',
-    'polish': 'pol_Latn',
-    'russian': 'rus_Cyrl',
-    'ukrainian': 'ukr_Cyrl',
-    'greek': 'ell_Grek',
-    'turkish': 'tur_Latn',
-    
-    # Asian languages
-    'japanese': 'jpn_Jpan',
-    'korean': 'kor_Hang',
-    'chinese': 'zho_Hans',
-    'chinese_traditional': 'zho_Hant',
-    'vietnamese': 'vie_Latn',
-    'thai': 'tha_Thai',
-    'indonesian': 'ind_Latn',
-    'malay': 'zsm_Latn',
-    
-    # South Asian languages
-    'hindi': 'hin_Deva',
-    'tamil': 'tam_Taml',
-    'telugu': 'tel_Telu',
-    'bengali': 'ben_Beng',
-    'marathi': 'mar_Deva',
-    'gujarati': 'guj_Gujr',
-    'kannada': 'kan_Knda',
-    'malayalam': 'mal_Mlym',
-    'punjabi': 'pan_Guru',
-    'urdu': 'urd_Arab',
-    
-    # Middle Eastern languages
-    'arabic': 'arb_Arab',
-    'hebrew': 'heb_Hebr',
-    'persian': 'pes_Arab',
-    
-    # African languages
-    'swahili': 'swh_Latn',
-    'amharic': 'amh_Ethi',
-}
-
-
 class Translator:
-    """Translator using Facebook's NLLB-200-1.3B model (GPU-accelerated)"""
+    """
+    Context-aware translator using Llama-3.1-8B-Instruct
+    Leverages RAG domain context for improved translation accuracy
+    """
     
     _instance = None
     _model = None
@@ -75,33 +30,57 @@ class Translator:
         return cls._instance
     
     def __init__(self):
-        """Initialize NLLB translator on GPU"""
+        """Initialize Llama translator on GPU with 4-bit quantization"""
         if Translator._model is not None:
             return  # Already initialized
             
         self.model_name = settings.translation_model
         self.device = settings.translation_device
         self.max_length = settings.translation_max_length
+        self.temperature = settings.translation_temperature
+        self.use_4bit = settings.translation_use_4bit
         
-        logger.info(f"Loading NLLB model: {self.model_name} on {self.device}")
+        logger.info(f"Loading Llama model: {self.model_name} on {self.device}")
+        logger.info(f"  4-bit quantization: {self.use_4bit}")
+        logger.info(f"  Temperature: {self.temperature}")
         
         try:
+            # Load tokenizer
             Translator._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-            Translator._model = AutoModelForSeq2SeqLM.from_pretrained(
-                self.model_name,
-                torch_dtype=torch.float16 if self.device == "cuda" else torch.float32
-            ).to(self.device)
             
-            # Set model to eval mode
-            Translator._model.eval()
+            # Setup quantization config
+            if self.use_4bit:
+                quantization_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=torch.float16,
+                    bnb_4bit_use_double_quant=True,
+                    bnb_4bit_quant_type="nf4"
+                )
+                
+                Translator._model = AutoModelForCausalLM.from_pretrained(
+                    self.model_name,
+                    quantization_config=quantization_config,
+                    device_map="auto",
+                    torch_dtype=torch.float16
+                )
+            else:
+                Translator._model = AutoModelForCausalLM.from_pretrained(
+                    self.model_name,
+                    device_map="auto",
+                    torch_dtype=torch.float16
+                )
             
-            logger.info(f"NLLB Translator initialized successfully on {self.device}")
+            # Set pad token if not set
+            if Translator._tokenizer.pad_token is None:
+                Translator._tokenizer.pad_token = Translator._tokenizer.eos_token
+            
+            logger.info(f"Llama Translator initialized successfully")
             
             # Warm up the model
             self._warmup()
             
         except Exception as e:
-            logger.error(f"Failed to load NLLB model: {e}")
+            logger.error(f"Failed to load Llama model: {e}")
             raise
     
     @property
@@ -115,35 +94,50 @@ class Translator:
     def _warmup(self):
         """Warm up the model with a simple translation"""
         try:
-            logger.info("Warming up NLLB model...")
-            self.translate_text("Hello", "english", "spanish")
+            logger.info("Warming up Llama model...")
+            self.translate_text("வணக்கம்", "english", context="greeting")
             logger.info("Model warmup complete")
         except Exception as e:
             logger.warning(f"Model warmup failed: {e}")
     
-    def _get_nllb_code(self, language: str) -> str:
-        """Convert language name to NLLB code"""
-        lang_lower = language.lower().strip()
-        
-        if lang_lower in NLLB_LANG_CODES:
-            return NLLB_LANG_CODES[lang_lower]
-        
-        # Check if it's already an NLLB code
-        if '_' in lang_lower and len(lang_lower) == 8:
-            return lang_lower
-        
-        # Default to English
-        logger.warning(f"Unknown language '{language}', defaulting to English")
-        return 'eng_Latn'
-    
-    def translate_text(self, text: str, source_language: str, target_language: str) -> str:
+    def _build_prompt(self, text: str, target_language: str, context: str = None) -> str:
         """
-        Translate text using NLLB-200
+        Build instruction prompt for Llama-3.1-8B-Instruct
         
         Args:
-            text: Text to translate
-            source_language: Source language (e.g., 'english', 'tamil')
-            target_language: Target language (e.g., 'spanish', 'french')
+            text: Source text to translate
+            target_language: Target language name
+            context: RAG context for domain awareness
+            
+        Returns:
+            Formatted prompt string
+        """
+        domain_info = f"Domain context: {context}" if context else "Domain: general conversation"
+        
+        prompt = f"""<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+You are a professional translator specializing in Tamil to {target_language} translation.
+{domain_info}
+
+Rules:
+- Translate naturally, preserving the original meaning and tone
+- Keep technical terms and proper nouns accurate
+- Handle colloquial/spoken language appropriately
+- Output ONLY the translation, no explanations
+<|eot_id|><|start_header_id|>user<|end_header_id|>
+Translate this Tamil text to {target_language}:
+{text}
+<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+"""
+        return prompt
+    
+    def translate_text(self, text: str, target_language: str, context: str = None) -> str:
+        """
+        Translate text using Llama with context awareness
+        
+        Args:
+            text: Text to translate (Tamil)
+            target_language: Target language (e.g., 'english')
+            context: RAG context for domain-specific translation
             
         Returns:
             Translated text
@@ -152,39 +146,44 @@ class Translator:
             if not text or not text.strip():
                 return text
             
-            src_code = self._get_nllb_code(source_language)
-            tgt_code = self._get_nllb_code(target_language)
-            
-            # Set source language for tokenizer
-            self.tokenizer.src_lang = src_code
+            prompt = self._build_prompt(text, target_language, context)
             
             # Tokenize input
             inputs = self.tokenizer(
-                text, 
+                prompt, 
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
                 max_length=self.max_length
-            ).to(self.device)
+            ).to(self.model.device)
             
             # Generate translation
             with torch.no_grad():
-                generated_tokens = self.model.generate(
+                outputs = self.model.generate(
                     **inputs,
-                    forced_bos_token_id=self.tokenizer.convert_tokens_to_ids(tgt_code),
-                    max_length=self.max_length,
-                    num_beams=5,
-                    length_penalty=1.0,
-                    early_stopping=True
+                    max_new_tokens=self.max_length,
+                    temperature=self.temperature,
+                    do_sample=True if self.temperature > 0 else False,
+                    pad_token_id=self.tokenizer.pad_token_id,
+                    eos_token_id=self.tokenizer.eos_token_id
                 )
             
             # Decode output
-            translated = self.tokenizer.batch_decode(
-                generated_tokens, 
-                skip_special_tokens=True
-            )[0]
+            full_output = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
             
-            return translated
+            # Extract only the translation (after the last assistant header)
+            if "assistant" in full_output.lower():
+                parts = full_output.split("assistant")
+                translation = parts[-1].strip()
+            else:
+                # Fallback: remove the prompt portion
+                translation = full_output.replace(prompt, "").strip()
+            
+            # Clean up any remaining markers
+            for marker in ["<|eot_id|>", "<|end_of_text|>", "</s>"]:
+                translation = translation.replace(marker, "").strip()
+            
+            return translation
             
         except Exception as e:
             logger.error(f"Translation failed: {e}")
@@ -192,24 +191,23 @@ class Translator:
     
     def translate_segments(self, segments: List[Dict[str, Any]], 
                           target_language: str,
-                          source_language: str = "auto") -> List[Dict[str, Any]]:
+                          source_language: str = "tamil",
+                          context: str = None) -> List[Dict[str, Any]]:
         """
-        Translate segments
+        Translate segments with RAG context
         
         Args:
             segments: List of segments with 'refined' or 'text' content
             target_language: Target language
-            source_language: Source language (default: auto-detect from first segment)
+            source_language: Source language
+            context: RAG visual context for domain awareness
             
         Returns:
             List of translated segments
         """
         logger.info(f"Translating {len(segments)} segments to {target_language}")
-        
-        # If source is auto, try to detect from content or default to English
-        if source_language == "auto":
-            source_language = "english"  # Default assumption
-            logger.info(f"Source language set to: {source_language}")
+        if context:
+            logger.info(f"Using RAG context: {context[:100]}...")
         
         translated_segments = []
         
@@ -219,8 +217,8 @@ class Translator:
             
             translated_text = self.translate_text(
                 text_to_translate, 
-                source_language, 
-                target_language
+                target_language, 
+                context=context
             )
             
             translated_segments.append({
@@ -231,7 +229,7 @@ class Translator:
                 'translated': translated_text
             })
             
-            if (i + 1) % 10 == 0:
+            if (i + 1) % 5 == 0:
                 logger.info(f"Translated {i + 1}/{len(segments)} segments")
         
         logger.info(f"Translation completed for all {len(segments)} segments")

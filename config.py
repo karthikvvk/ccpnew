@@ -47,10 +47,12 @@ class Settings:
     whisper_device: str = "cuda"
     whisper_language: str = "auto"
     
-    # Translation Settings (NLLB-200)
-    translation_model: str = "facebook/nllb-200-1.3B"
+    # Translation Settings (Llama-3.1-8B-Instruct)
+    translation_model: str = "meta-llama/Llama-3.1-8B-Instruct"
     translation_device: str = "cuda"
-    translation_max_length: int = 256
+    translation_max_length: int = 512
+    translation_temperature: float = 0.3
+    translation_use_4bit: bool = True
     
     # Vector Database
     vector_db_path: Path = field(default_factory=lambda: Path("./vector_db"))
@@ -113,9 +115,11 @@ class Settings:
             whisper_language=config.get("whisper", {}).get("language", "auto"),
             
             # Translation settings
-            translation_model=config.get("translation", {}).get("model", "facebook/nllb-200-1.3B"),
+            translation_model=config.get("translation", {}).get("model", "meta-llama/Llama-3.1-8B-Instruct"),
             translation_device=config.get("translation", {}).get("device", "cuda"),
-            translation_max_length=config.get("translation", {}).get("max_length", 256),
+            translation_max_length=config.get("translation", {}).get("max_length", 512),
+            translation_temperature=config.get("translation", {}).get("temperature", 0.3),
+            translation_use_4bit=config.get("translation", {}).get("use_4bit", True),
             
             # Vector DB settings
             vector_db_path=Path(config.get("vector_db", {}).get("path", "./vector_db")),

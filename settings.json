@@ -21,9 +21,11 @@
     "language": "auto"
   },
   "translation": {
-    "model": "facebook/nllb-200-1.3B",
+    "model": "meta-llama/Llama-3.1-8B-Instruct",
     "device": "cuda",
-    "max_length": 256
+    "max_length": 512,
+    "temperature": 0.3,
+    "use_4bit": true
   },
   "vector_db": {
     "path": "./vector_db",

@@ -1,7 +1,7 @@
 """
 Main orchestration pipeline for video translation
-FLOW: Whisper → LLM Refiner → NLLB-200 Translation → TTS
-WITH: Semantic RAG (self-pruning)
+FLOW: Whisper → Llama-3.1-8B (+ RAG Context) → TTS
+WITH: Semantic RAG for domain-aware translation
 """
 from pathlib import Path
 from typing import Dict, Any
@@ -13,7 +13,6 @@ from modules.video_processor import VideoProcessor
 from modules.frame_embedder import FrameEmbedder
 from modules.vector_store import VectorStore
 from modules.speech_to_text import SpeechToText
-from modules.transcription_refiner import TranscriptionRefiner
 from modules.simple_translator import Translator
 from modules.text_to_speech import TextToSpeech
 from config import settings
@@ -148,17 +147,18 @@ class TranslationPipeline:
             detected_language = transcription.get('language', 'en')  # Get Whisper detected language
             logger.info(f"Detected source language: {detected_language}")
             
-            # Step 6: Refine transcription with LLM
-            # Note: Flan-T5 only works well with English, so skip refinement for other languages
-            logger.info("Step 6/9: Refining transcription with LLM...")
-            refiner = TranscriptionRefiner()
-            refined_segments = refiner.refine_segments(
-                segments, 
-                visual_context if use_rag else None,
-                source_language=detected_language  # Pass detected language
-            )
+            # Step 6: Prepare segments for translation (passthrough)
+            logger.info("Step 6/9: Preparing segments for translation...")
+            refined_segments = []
+            for segment in segments:
+                refined_segments.append({
+                    'start': segment['start'],
+                    'end': segment['end'],
+                    'original': segment['text'],
+                    'refined': segment['text']  # Passthrough - no refinement
+                })
             
-            # Save refined transcription
+            # Save prepared transcription
             refined_json_path = self.file_manager.job_dir / 'refined_transcription.json'
             refined_txt_path = self.file_manager.job_dir / 'refined_transcription.txt'
             
@@ -174,15 +174,16 @@ class TranslationPipeline:
             self.file_manager.track_file('refined_json', refined_json_path)
             self.file_manager.track_file('refined_txt', refined_txt_path)
             
-            logger.info(f"Refined transcription saved")
+            logger.info(f"Prepared {len(refined_segments)} segments for translation")
             
-            # Step 7: Translate refined text with NLLB-200
-            logger.info(f"Step 7/9: Translating to {target_language} with NLLB-200...")
+            # Step 7: Translate with Llama (context-aware)
+            logger.info(f"Step 7/9: Translating to {target_language} with Llama + RAG context...")
             translator = Translator()
             translated_segments = translator.translate_segments(
                 refined_segments, 
                 target_language,
-                source_language=detected_language
+                source_language=detected_language,
+                context=visual_context if use_rag else None  # Pass RAG context!
             )
             
             # Save translation
