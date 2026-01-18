@@ -50,7 +50,7 @@ async def startup_event():
     logger.info(f"Starting {settings.app_name}")
     logger.info(f"Debug mode: {settings.debug}")
     logger.info(f"Whisper model: {settings.whisper_model}")
-    logger.info(f"LLM model: {settings.llm_model}")
+    logger.info(f"Translation model: {settings.translation_model}")
 
 
 @app.on_event("shutdown")

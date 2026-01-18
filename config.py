@@ -6,9 +6,15 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
 
+# Project root directory (where config.py is located)
+PROJECT_ROOT = Path(__file__).parent.resolve()
 
-def _load_json_config(config_path: Path = Path("settings.json")) -> dict:
+
+def _load_json_config(config_path: Path = None) -> dict:
     """Load configuration from JSON file"""
+    if config_path is None:
+        config_path = PROJECT_ROOT / "settings.json"
+    
     if not config_path.exists():
         raise FileNotFoundError(f"Configuration file not found: {config_path}")
     
@@ -80,7 +86,7 @@ class Settings:
         self.log_file.parent.mkdir(parents=True, exist_ok=True)
     
     @classmethod
-    def from_json(cls, config_path: Path = Path("settings.json")) -> "Settings":
+    def from_json(cls, config_path: Path = None) -> "Settings":
         """Load settings from JSON file"""
         config = _load_json_config(config_path)
         
