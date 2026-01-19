@@ -18,11 +18,12 @@ Pillow
 # Speech-to-Text (Whisper)
 openai-whisper
 
-# Translation (NLLB-200)
+# Translation (Llama-3.1-8B with 4-bit quantization)
 transformers
 sentencepiece
 accelerate
 torch
+bitsandbytes
 numpy<2.0
 
 # Vector Database (RAG)

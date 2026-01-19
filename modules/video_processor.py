@@ -162,3 +162,101 @@ class VideoProcessor:
         except ffmpeg.Error as e:
             logger.error(f"Failed to reconstruct video: {e}")
             raise
+    
+    @staticmethod
+    def adjust_audio_speed(audio_path: Path, 
+                          target_duration: float,
+                          output_path: Path = None) -> Path:
+        """
+        Adjust audio speed to match target duration (video length)
+        
+        Args:
+            audio_path: Path to audio file
+            target_duration: Target duration in seconds (video length)
+            output_path: Path for output file (default: overwrites input)
+            
+        Returns:
+            Path to adjusted audio file
+        """
+        try:
+            # Get current audio duration
+            probe = ffmpeg.probe(str(audio_path))
+            current_duration = float(probe['format']['duration'])
+            
+            # Calculate speed factor
+            speed_factor = current_duration / target_duration
+            
+            logger.info(f"Adjusting audio speed:")
+            logger.info(f"  Current duration: {current_duration:.2f}s")
+            logger.info(f"  Target duration: {target_duration:.2f}s")
+            logger.info(f"  Speed factor: {speed_factor:.3f}x")
+            
+            # If audio is already close to target (within 1%), skip adjustment
+            if 0.99 <= speed_factor <= 1.01:
+                logger.info("Audio duration already matches video, skipping adjustment")
+                return audio_path
+            
+            # Limit speed factor to reasonable range (0.5x to 2.0x)
+            # For extreme cases, we need to chain multiple atempo filters
+            if speed_factor < 0.5:
+                logger.warning(f"Speed factor {speed_factor:.2f} is very low, audio will be significantly shortened")
+                speed_factor = max(0.5, speed_factor)
+            elif speed_factor > 2.0:
+                logger.warning(f"Speed factor {speed_factor:.2f} is very high, audio will be significantly stretched")
+                speed_factor = min(2.0, speed_factor)
+            
+            # Prepare output path
+            if output_path is None:
+                output_path = audio_path.parent / f"{audio_path.stem}_synced{audio_path.suffix}"
+            
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Apply speed adjustment using atempo filter
+            # atempo range is 0.5 to 2.0, chain if needed
+            filters = []
+            remaining_factor = speed_factor
+            
+            while remaining_factor > 2.0:
+                filters.append('atempo=2.0')
+                remaining_factor /= 2.0
+            while remaining_factor < 0.5:
+                filters.append('atempo=0.5')
+                remaining_factor /= 0.5
+            
+            filters.append(f'atempo={remaining_factor}')
+            filter_chain = ','.join(filters)
+            
+            # Build ffmpeg command
+            stream = ffmpeg.input(str(audio_path))
+            stream = stream.filter('atempo', remaining_factor)
+            stream = ffmpeg.output(stream, str(output_path), acodec='pcm_s16le')
+            
+            ffmpeg.run(stream, overwrite_output=True, quiet=True)
+            
+            # Verify output
+            output_probe = ffmpeg.probe(str(output_path))
+            output_duration = float(output_probe['format']['duration'])
+            
+            logger.info(f"Audio speed adjusted successfully")
+            logger.info(f"  New duration: {output_duration:.2f}s")
+            
+            return output_path
+            
+        except ffmpeg.Error as e:
+            logger.error(f"Failed to adjust audio speed: {e}")
+            # Return original audio if adjustment fails
+            return audio_path
+        except Exception as e:
+            logger.error(f"Error adjusting audio speed: {e}")
+            return audio_path
+    
+    @staticmethod
+    def get_audio_duration(audio_path: Path) -> float:
+        """Get audio file duration in seconds"""
+        try:
+            probe = ffmpeg.probe(str(audio_path))
+            return float(probe['format']['duration'])
+        except Exception as e:
+            logger.error(f"Failed to get audio duration: {e}")
+            return 0.0
+

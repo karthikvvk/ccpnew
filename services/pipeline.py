@@ -216,10 +216,22 @@ class TranslationPipeline:
             
             self.file_manager.track_file('translated_audio', translated_audio_path)
             
+            # Step 8.5: Adjust audio speed to match video duration
+            logger.info("Adjusting audio speed to match video duration...")
+            video_info = video_processor.get_video_info()
+            video_duration = video_info['duration']
+            
+            synced_audio_path = VideoProcessor.adjust_audio_speed(
+                translated_audio_path,
+                video_duration,
+                output_path=self.file_manager.job_dir / 'synced_audio.wav'
+            )
+            self.file_manager.track_file('synced_audio', synced_audio_path)
+            
             # Step 9: Reconstruct video
-            logger.info("Step 9/9: Reconstructing video with new audio...")
+            logger.info("Step 9/9: Reconstructing video with synced audio...")
             final_video_path = self.file_manager.get_path('final_video')
-            VideoProcessor.reconstruct_video(video_path, translated_audio_path, final_video_path)
+            VideoProcessor.reconstruct_video(video_path, synced_audio_path, final_video_path)
             self.file_manager.track_file('final_video', final_video_path)
             
             # Save manifest
