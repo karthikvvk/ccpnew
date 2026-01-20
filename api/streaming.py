@@ -15,7 +15,7 @@ from config import settings
 
 logger = setup_logger("streaming_api")
 
-router = APIRouter(prefix="/stream", tags=["Streaming"])
+router = APIRouter(prefix="/stream", tags=["streaming"])
 
 # Global instances (created on first use)
 _streamer = None

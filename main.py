@@ -35,7 +35,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(router, prefix="/api/v1", tags=["translation"])
-app.include_router(streaming_router, prefix="/api/v1", tags=["streaming"])
+app.include_router(streaming_router, prefix="/api/v1")  # Uses tags from streaming.py
 
 
 @app.get("/", response_model=HealthResponse)
