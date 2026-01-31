@@ -27,14 +27,15 @@ class Settings(BaseSettings):
     
     # Whisper Settings
     whisper_model: str = "medium"
-    whisper_device: str = "cpu"
+    whisper_device: str = "gpu"
     whisper_language: str = "auto"
     
     # LLM Settings (NLLB-200: Multilingual translation + context understanding)
     llm_model: str = "facebook/nllb-200-1.3B"
-    llm_device: str = "cpu"
+    llm_device: str = "gpu"
     llm_max_length: int = 256
-    
+    llm_temperature: float = 0.3
+
     # Vector Database
     vector_db_path: Path = Path("./vector_db")
     embedding_model: str = "sentence-transformers/clip-ViT-B-32"
@@ -45,7 +46,7 @@ class Settings(BaseSettings):
     
     # Voice Cloning Settings (XTTS-v2)
     use_voice_cloning: bool = False  # True = use XTTS-v2, False = use gTTS
-    tts_device: str = "cpu"  # Device for XTTS-v2
+    tts_device: str = "gpu"  # Device for XTTS-v2
     
     # Logging
     log_level: str = "INFO"
