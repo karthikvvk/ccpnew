@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.3
     translation_model: str = "facebook/nllb-200-1.3B"
     translation_device: str = "cuda"
+    translation_max_length: int = 512
+    translation_temperature: float = 0.3
+    translation_use_4bit: bool = True
 
     # Vector Database
     vector_db_path: Path = Path("./vector_db")
