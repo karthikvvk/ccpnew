@@ -11,14 +11,12 @@ from utils.logger import setup_logger
 
 logger = setup_logger("main")
 
-# Create FastAPI app
 app = FastAPI(
     title=settings.app_name,
     description="Video Translation API with RAG-enhanced transcription",
     version="1.0.0"
 )
 
-# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -27,41 +25,36 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include routers
 app.include_router(router, prefix="/api/v1", tags=["translation"])
-app.include_router(streaming_router, prefix="/api/v1", tags=["streaming"])
+app.include_router(streaming_router, prefix="/api/v1")
 
 
 @app.get("/", response_model=HealthResponse)
 async def root():
-    """Root endpoint"""
     return HealthResponse(status="ok")
 
 
 @app.get("/health", response_model=HealthResponse)
 async def health():
-    """Health check endpoint"""
     return HealthResponse(status="healthy")
 
 
 @app.on_event("startup")
 async def startup_event():
-    """Startup event handler"""
     logger.info(f"Starting {settings.app_name}")
     logger.info(f"Debug mode: {settings.debug}")
     logger.info(f"Whisper model: {settings.whisper_model}")
-    logger.info(f"LLM model: {settings.llm_model}")
+    logger.info(f"Translation model: {settings.translation_model}")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Shutdown event handler"""
     logger.info(f"Shutting down {settings.app_name}")
 
 
 if __name__ == "__main__":
     import uvicorn
-    
+
     uvicorn.run(
         "main:app",
         host=settings.host,
