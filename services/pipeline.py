@@ -272,6 +272,7 @@ class TranslationPipeline:
             'chinese': 'zh-cn',
             'arabic': 'ar',
             'hindi': 'hi',
+            'tamil': 'ta',
             'english': 'en'
         }
         
