@@ -8,7 +8,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'https://fiber-eleven-effort-lookup.trycloudflare.com',
+        target: 'https://vanilla-build-black-saw.trycloudflare.com',
         changeOrigin: true,
       }
     }

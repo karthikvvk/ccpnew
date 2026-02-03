@@ -27,23 +27,8 @@ class SemanticRAG:
     BASE_SCORE_THRESHOLD = 0.3
     
     # Scene vocabulary (semantic anchors)
-    SCENE_VOCABULARY = [
-        # Objects & Structures
-        "monument", "temple", "mosque", "church", "palace", "fort",
-        "iron pillar", "sculpture", "artifact", "ancient structure",
-        "building", "architecture", "ruins", "tower", "dome",
-        
-        # People & Actions
-        "person speaking", "presenter", "crowd", "people walking",
-        "close-up face", "interview", "demonstration",
-        
-        # Visual Elements
-        "text on screen", "title card", "landscape", "cityscape",
-        "aerial view", "interior", "exterior", "detail shot",
-        
-        # Natural Elements
-        "sky", "water", "trees", "mountains", "sunset", "clouds"
-    ]
+    # Scene vocabulary (Removed static list - now dynamic)
+    # SCENE_VOCABULARY removed
     
     # Meta-categories for hierarchical grounding
     META_CATEGORIES = {
@@ -69,23 +54,37 @@ class SemanticRAG:
             embedder: FrameEmbedder instance (for encoding text/images)
         """
         self.embedder = embedder
-        self._vocab_embeddings = None  # Cached vocabulary embeddings
+        self._vocab_embeddings = {}  # Cached vocabulary embeddings: {term: embedding}
         self._category_embeddings = None  # Cached category embeddings
         
         logger.info("Semantic RAG initialized")
     
-    def _ensure_vocab_cached(self):
-        """Pre-encode scene vocabulary to avoid redundant encoding"""
-        if self._vocab_embeddings is not None:
+    def _ensure_vocab_cached(self, vocabulary: List[str]):
+        """
+        Ensure provided vocabulary terms are cached.
+        Only encodes words that are not already in the cache.
+        
+        Args:
+            vocabulary: List of string terms to ensure are in cache
+        """
+        if not vocabulary:
             return
+            
+        new_terms = [term for term in vocabulary if term not in self._vocab_embeddings]
         
-        logger.info("Caching scene vocabulary embeddings...")
-        self._vocab_embeddings = {}
-        
-        for term in self.SCENE_VOCABULARY:
-            self._vocab_embeddings[term] = self.embedder.model.encode(term)
-        
-        logger.info(f"Cached {len(self._vocab_embeddings)} vocabulary embeddings")
+        if new_terms:
+            logger.info(f"Encoding {len(new_terms)} new vocabulary terms...")
+            # Batch encode for efficiency if supported, otherwise loop
+            if hasattr(self.embedder.model, 'encode'):
+                embeddings = self.embedder.model.encode(new_terms)
+                for term, emb in zip(new_terms, embeddings):
+                    self._vocab_embeddings[term] = emb
+            else:
+                # Fallback if specific embedder API is different
+                for term in new_terms:
+                     self._vocab_embeddings[term] = self.embedder.model.encode(term)
+                
+            logger.info(f"Updated vocabulary cache. Total terms: {len(self._vocab_embeddings)}")
     
     def _ensure_categories_cached(self):
         """Pre-encode meta-categories"""
@@ -104,28 +103,55 @@ class SemanticRAG:
     
     def _cosine_similarity(self, emb1: np.ndarray, emb2: np.ndarray) -> float:
         """Calculate cosine similarity between two embeddings"""
-        return np.dot(emb1, emb2) / (np.linalg.norm(emb1) * np.linalg.norm(emb2))
+        return np.dot(emb1, emb2) / (np.linalg.norm(emb1) * np.linalg.norm(emb2) + 1e-9)
+
+    def verify_space_and_filter(
+        self,
+        frame_embedding: np.ndarray,
+        candidate_words: List[str],
+        threshold: float = 0.25
+    ) -> List[Tuple[str, float]]:
+        """
+        Reverse logical check:
+        1. Embed the candidate words (if not cached).
+        2. Verify if they fall into the semantic space of the frame.
+        3. Filter those that don't meet the threshold.
+        
+        Args:
+            frame_embedding: The CLIP embedding of the video frame.
+            candidate_words: List of words/phrases to verify.
+            threshold: Cosine similarity threshold.
+            
+        Returns:
+            List of (word, score) tuples that passed the filter.
+        """
+        self._ensure_vocab_cached(candidate_words)
+        
+        verified_matches = []
+        for word in candidate_words:
+            word_emb = self._vocab_embeddings.get(word)
+            if word_emb is None:
+                continue
+                
+            score = self._cosine_similarity(frame_embedding, word_emb)
+            if score >= threshold:
+                verified_matches.append((word, score))
+        
+        # Sort by score descending
+        verified_matches.sort(key=lambda x: x[1], reverse=True)
+        return verified_matches
     
     def _match_to_vocabulary(
         self,
         frame_embedding: np.ndarray,
+        vocabulary: List[str],
         top_k: int = 3
     ) -> List[Tuple[str, float]]:
         """
-        Match frame embedding to scene vocabulary
-        
-        Returns:
-            List of (term, confidence_score) tuples
+        Match frame embedding to provided vocabulary using the verification logic.
         """
-        self._ensure_vocab_cached()
-        
-        scores = {}
-        for term, vocab_emb in self._vocab_embeddings.items():
-            scores[term] = self._cosine_similarity(frame_embedding, vocab_emb)
-        
-        # Sort by score, return top-k
-        sorted_matches = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-        return sorted_matches[:top_k]
+        matches = self.verify_space_and_filter(frame_embedding, vocabulary, threshold=0.2)
+        return matches[:top_k]
     
     def _deduplicate_concepts(
         self,
@@ -145,7 +171,7 @@ class SemanticRAG:
         if not concepts:
             return []
         
-        self._ensure_vocab_cached()
+        self._ensure_vocab_cached([c for c, _ in concepts])
         
         unique = []
         for concept, score in concepts:
@@ -204,14 +230,16 @@ class SemanticRAG:
     def analyze_frames(
         self,
         frame_embeddings: List[np.ndarray],
-        frame_paths: List[Path]
+        frame_paths: List[Path],
+        vocabulary: List[str]
     ) -> Optional[Dict[str, Any]]:
         """
-        Analyze frames with self-pruning
+        Analyze frames with dynamic vocabulary
         
         Args:
             frame_embeddings: List of CLIP frame embeddings
             frame_paths: Corresponding frame paths
+            vocabulary: Dynamic list of concepts to look for
             
         Returns:
             Analysis dict or None if self-pruned
@@ -219,15 +247,19 @@ class SemanticRAG:
         if not frame_embeddings:
             logger.warning("No frames to analyze")
             return None
+            
+        if not vocabulary:
+            logger.warning("No vocabulary provided for analysis")
+            return None
         
-        logger.info(f"Analyzing {len(frame_embeddings)} frames")
+        logger.info(f"Analyzing {len(frame_embeddings)} frames against {len(vocabulary)} concepts")
         
         # Step 1: Match each frame to vocabulary (embedding-native)
         frame_matches = []
         all_scores = []
         
         for i, frame_emb in enumerate(frame_embeddings):
-            matches = self._match_to_vocabulary(frame_emb, top_k=3)
+            matches = self._match_to_vocabulary(frame_emb, vocabulary, top_k=3)
             frame_matches.append(matches)
             all_scores.extend([score for _, score in matches])
         
@@ -310,22 +342,19 @@ class SemanticRAG:
     def analyze_global(
         self,
         all_frame_embeddings: List[np.ndarray],
+        vocabulary: List[str],
         sample_rate: int = 5
     ) -> Optional[Dict[str, Any]]:
         """
-        Perform video-level global RAG analysis.
-        Extracts overall domain, terminology, and concepts.
-        
-        Args:
-            all_frame_embeddings: All frame embeddings from the video
-            sample_rate: Sample every Nth frame to reduce computation
-            
-        Returns:
-            Global context dict with domain, concepts, terminology
+        Perform video-level global RAG analysis with dynamic vocabulary.
         """
         if not all_frame_embeddings:
             logger.warning("No frames for global analysis")
             return None
+            
+        if not vocabulary:
+             logger.warning("No vocabulary provided for global analysis")
+             return None
         
         # Sample frames for efficiency
         sampled = all_frame_embeddings[::sample_rate]
@@ -334,10 +363,10 @@ class SemanticRAG:
         # Aggregate all frame-to-concept matches
         all_concept_scores = defaultdict(list)
         
-        self._ensure_vocab_cached()
+        self._ensure_vocab_cached(vocabulary)
         
         for frame_emb in sampled:
-            matches = self._match_to_vocabulary(frame_emb, top_k=5)
+            matches = self._match_to_vocabulary(frame_emb, vocabulary, top_k=5)
             for concept, score in matches:
                 all_concept_scores[concept].append(score)
         
@@ -391,17 +420,11 @@ class SemanticRAG:
     def analyze_chunk(
         self,
         chunk_frame_embeddings: List[np.ndarray],
+        vocabulary: List[str],
         global_context: Optional[Dict[str, Any]] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Perform chunk-level RAG analysis constrained by global context.
-        
-        Args:
-            chunk_frame_embeddings: Frame embeddings for this chunk
-            global_context: Global context from analyze_global (optional)
-            
-        Returns:
-            Chunk-specific context dict
         """
         if not chunk_frame_embeddings:
             logger.warning("No frames for chunk analysis")
@@ -412,10 +435,10 @@ class SemanticRAG:
         # Match chunk frames to vocabulary
         chunk_concepts = defaultdict(list)
         
-        self._ensure_vocab_cached()
+        self._ensure_vocab_cached(vocabulary)
         
         for frame_emb in chunk_frame_embeddings:
-            matches = self._match_to_vocabulary(frame_emb, top_k=3)
+            matches = self._match_to_vocabulary(frame_emb, vocabulary, top_k=3)
             for concept, score in matches:
                 chunk_concepts[concept].append(score)
         

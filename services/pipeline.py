@@ -22,6 +22,26 @@ from config import settings
 logger = setup_logger("pipeline")
 
 
+
+# Default vocabulary for Semantic RAG (can be overridden dynamically)
+DEFAULT_SCENE_VOCABULARY = [
+    # Objects & Structures
+    "monument", "temple", "mosque", "church", "palace", "fort",
+    "iron pillar", "sculpture", "artifact", "ancient structure",
+    "building", "architecture", "ruins", "tower", "dome",
+    
+    # People & Actions
+    "person speaking", "presenter", "crowd", "people walking",
+    "close-up face", "interview", "demonstration",
+    
+    # Visual Elements
+    "text on screen", "title card", "landscape", "cityscape",
+    "aerial view", "interior", "exterior", "detail shot",
+    
+    # Natural Elements
+    "sky", "water", "trees", "mountains", "sunset", "clouds"
+]
+
 class TranslationPipeline:
     """
     Orchestrates the complete video translation workflow with multi-level chunking
@@ -207,7 +227,7 @@ class TranslationPipeline:
             from modules.semantic_rag import SemanticRAG
             rag = SemanticRAG(embedder=embedder)
             
-            return rag.analyze_global(embeddings)
+            return rag.analyze_global(embeddings, vocabulary=DEFAULT_SCENE_VOCABULARY)
             
         except Exception as e:
             logger.warning(f"Global RAG failed, proceeding without it: {e}")
@@ -306,7 +326,7 @@ class TranslationPipeline:
                 from modules.semantic_rag import SemanticRAG
                 rag = SemanticRAG(embedder=embedder)
                 
-                local_analysis = rag.analyze_chunk(embeddings, global_context)
+                local_analysis = rag.analyze_chunk(embeddings, vocabulary=DEFAULT_SCENE_VOCABULARY, global_context=global_context)
                 if local_analysis:
                     local_context = local_analysis['context']
             
