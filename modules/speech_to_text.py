@@ -243,8 +243,9 @@ class SpeechToText:
             if confidence['no_speech_prob'] and confidence['no_speech_prob'] > 0.5:
                 logger.warning(f"High no_speech probability: {confidence['no_speech_prob']:.2f}")
             
-            logger.info(f"Transcription completed: {len(processed_segments)} segments, "
-                       f"avg_logprob={confidence['avg_logprob']:.2f if confidence['avg_logprob'] else 'N/A'}")
+            avg_lp = confidence.get("avg_logprob")
+            avg_lp_str = f"{avg_lp:.2f}" if avg_lp is not None else "N/A"
+            logger.info(f"Transcription completed: {len(processed_segments)} segments, avg_logprob={avg_lp_str}")
             
             return {
                 'segments': processed_segments,

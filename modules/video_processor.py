@@ -432,16 +432,16 @@ class VideoProcessor:
                     if abs(gap) > 0.5:  # More than 0.5s gap/overlap
                         logger.warning(f"Timeline gap/overlap between chunks: {gap:.2f}s")
             
-            # Create concat file for ffmpeg
-            concat_file = output_path.parent / 'concat_list.txt'
-            with open(concat_file, 'w') as f:
-                for chunk in sorted_chunks:
-                    # Escape single quotes in path
-                    escaped_path = str(chunk['path']).replace("'", "'\\''")
-                    f.write(f"file '{escaped_path}'\n")
-            
             # Use ffmpeg concat demuxer
-            if crossfade_ms > 0 and len(sorted_chunks) > 1:
+            if len(sorted_chunks) == 1:
+                # Single chunk case: Just copy/convert to output
+                logger.info("Single chunk detected, skipping merge")
+                stream = ffmpeg.input(str(sorted_chunks[0]['path']))
+                stream = ffmpeg.output(stream, str(output_path), acodec='pcm_s16le')
+                ffmpeg.run(stream, overwrite_output=True, quiet=True)
+                
+            elif crossfade_ms > 0 and len(sorted_chunks) > 1:
+                # ... (existing crossfade logic) ...
                 # Complex filter for crossfade
                 inputs = [ffmpeg.input(str(chunk['path'])) for chunk in sorted_chunks]
                 
@@ -459,14 +459,22 @@ class VideoProcessor:
                 
                 stream = ffmpeg.output(merged, str(output_path), acodec='pcm_s16le')
                 ffmpeg.run(stream, overwrite_output=True, quiet=True)
+                
             else:
-                # Simple concat without crossfade
+                # Simple concat without crossfade (for >1 chunks)
+                concat_file = output_path.parent / 'concat_list.txt'
+                with open(concat_file, 'w') as f:
+                    for chunk in sorted_chunks:
+                        # Escape single quotes in path
+                        escaped_path = str(chunk['path']).replace("'", "'\\''")
+                        f.write(f"file '{escaped_path}'\n")
+                        
                 stream = ffmpeg.input(str(concat_file), format='concat', safe=0)
                 stream = ffmpeg.output(stream, str(output_path), acodec='pcm_s16le')
                 ffmpeg.run(stream, overwrite_output=True, quiet=True)
-            
-            # Cleanup concat file
-            concat_file.unlink(missing_ok=True)
+                
+                # Cleanup concat file
+                concat_file.unlink(missing_ok=True)
             
             # Verify output
             output_probe = ffmpeg.probe(str(output_path))

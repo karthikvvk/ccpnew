@@ -51,7 +51,7 @@ class FileManager:
             'rag_context': self.job_dir / 'rag_context.json',
             'translation_json': self.job_dir / 'translation.json',
             'translation_txt': self.job_dir / 'translation.txt',
-            'translated_audio': self.job_dir / 'translated_audio.mp3',
+            'translated_audio': self.job_dir / 'translated_audio.wav',
             'final_video': self.job_dir / 'final_video.mp4',
         }
         

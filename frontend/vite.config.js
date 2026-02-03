@@ -8,7 +8,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'https://approximate-pro-speaker-ultra.trycloudflare.com ',
+        target: 'https://fiber-eleven-effort-lookup.trycloudflare.com',
         changeOrigin: true,
       }
     }
