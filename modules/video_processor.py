@@ -259,4 +259,223 @@ class VideoProcessor:
         except Exception as e:
             logger.error(f"Failed to get audio duration: {e}")
             return 0.0
+    
+    @staticmethod
+    def split_video(video_path: Path, 
+                    duration: int = 300,
+                    overlap: float = 0,
+                    output_dir: Path = None) -> list:
+        """
+        Split video into chunks of specified duration
+        
+        Args:
+            video_path: Path to input video
+            duration: Duration of each chunk in seconds
+            overlap: Overlap between chunks in seconds
+            output_dir: Directory for output chunks (default: same as video)
+            
+        Returns:
+            List of paths to video chunks
+        """
+        try:
+            video_path = Path(video_path)
+            output_dir = output_dir or video_path.parent / 'video_chunks'
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Get video duration
+            probe = ffmpeg.probe(str(video_path))
+            total_duration = float(probe['format']['duration'])
+            
+            logger.info(f"Splitting video ({total_duration:.1f}s) into {duration}s chunks")
+            
+            chunks = []
+            chunk_id = 0
+            start_time = 0
+            
+            while start_time < total_duration:
+                chunk_path = output_dir / f"chunk_{chunk_id:03d}.mp4"
+                
+                # Calculate chunk duration (may be shorter for last chunk)
+                chunk_duration = min(duration, total_duration - start_time)
+                
+                # Use ffmpeg to extract chunk
+                stream = ffmpeg.input(str(video_path), ss=start_time, t=chunk_duration)
+                stream = ffmpeg.output(stream, str(chunk_path), 
+                                      vcodec='copy', 
+                                      acodec='copy',
+                                      avoid_negative_ts='make_zero')
+                ffmpeg.run(stream, overwrite_output=True, quiet=True)
+                
+                chunks.append({
+                    'path': chunk_path,
+                    'start_time': start_time,
+                    'duration': chunk_duration,
+                    'chunk_id': chunk_id
+                })
+                
+                logger.info(f"  Chunk {chunk_id}: {start_time:.1f}s - {start_time + chunk_duration:.1f}s")
+                
+                chunk_id += 1
+                start_time += duration - overlap  # Apply overlap
+                
+            logger.info(f"Split video into {len(chunks)} chunks")
+            return chunks
+            
+        except Exception as e:
+            logger.error(f"Failed to split video: {e}")
+            raise
+    
+    @staticmethod
+    def split_audio(audio_path: Path,
+                    duration: int = 30,
+                    overlap: float = 1.5,
+                    output_dir: Path = None) -> list:
+        """
+        Split audio into sub-chunks for STT processing
+        
+        Args:
+            audio_path: Path to input audio
+            duration: Duration of each sub-chunk in seconds
+            overlap: Overlap between sub-chunks in seconds
+            output_dir: Directory for output sub-chunks
+            
+        Returns:
+            List of tuples: (path, start_time, end_time)
+        """
+        try:
+            audio_path = Path(audio_path)
+            output_dir = output_dir or audio_path.parent / 'audio_subchunks'
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Get audio duration
+            probe = ffmpeg.probe(str(audio_path))
+            total_duration = float(probe['format']['duration'])
+            
+            logger.info(f"Splitting audio ({total_duration:.1f}s) into {duration}s sub-chunks with {overlap}s overlap")
+            
+            subchunks = []
+            subchunk_id = 0
+            start_time = 0
+            
+            while start_time < total_duration:
+                subchunk_path = output_dir / f"subchunk_{subchunk_id:03d}.wav"
+                
+                # Calculate sub-chunk duration
+                end_time = min(start_time + duration, total_duration)
+                subchunk_duration = end_time - start_time
+                
+                # Use ffmpeg to extract sub-chunk
+                stream = ffmpeg.input(str(audio_path), ss=start_time, t=subchunk_duration)
+                stream = ffmpeg.output(stream, str(subchunk_path),
+                                      acodec='pcm_s16le',
+                                      ac=1,
+                                      ar='16000')
+                ffmpeg.run(stream, overwrite_output=True, quiet=True)
+                
+                subchunks.append({
+                    'path': subchunk_path,
+                    'start_time': start_time,
+                    'end_time': end_time,
+                    'subchunk_id': subchunk_id
+                })
+                
+                subchunk_id += 1
+                start_time += duration - overlap  # Apply overlap
+                
+                # Prevent infinite loop if overlap >= duration
+                if duration - overlap <= 0:
+                    logger.warning("Overlap >= duration, breaking to avoid infinite loop")
+                    break
+                    
+            logger.info(f"Split audio into {len(subchunks)} sub-chunks")
+            return subchunks
+            
+        except Exception as e:
+            logger.error(f"Failed to split audio: {e}")
+            raise
+    
+    @staticmethod
+    def merge_audios_timeline(audio_chunks: list,
+                              output_path: Path,
+                              crossfade_ms: int = 50,
+                              validate_duration: bool = True) -> Path:
+        """
+        Merge audio chunks with timeline awareness and optional crossfade
+        
+        Args:
+            audio_chunks: List of dicts with 'path', 'start_time', 'duration'
+            output_path: Path for merged audio output
+            crossfade_ms: Crossfade duration in milliseconds at joins
+            validate_duration: Whether to validate duration continuity
+            
+        Returns:
+            Path to merged audio file
+        """
+        try:
+            if not audio_chunks:
+                raise ValueError("No audio chunks to merge")
+            
+            output_path = Path(output_path)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Sort chunks by start_time
+            sorted_chunks = sorted(audio_chunks, key=lambda x: x.get('start_time', 0))
+            
+            logger.info(f"Merging {len(sorted_chunks)} audio chunks with {crossfade_ms}ms crossfade")
+            
+            # Validate duration continuity
+            if validate_duration:
+                for i in range(1, len(sorted_chunks)):
+                    prev_end = sorted_chunks[i-1].get('start_time', 0) + sorted_chunks[i-1].get('duration', 0)
+                    curr_start = sorted_chunks[i].get('start_time', 0)
+                    gap = curr_start - prev_end
+                    if abs(gap) > 0.5:  # More than 0.5s gap/overlap
+                        logger.warning(f"Timeline gap/overlap between chunks: {gap:.2f}s")
+            
+            # Create concat file for ffmpeg
+            concat_file = output_path.parent / 'concat_list.txt'
+            with open(concat_file, 'w') as f:
+                for chunk in sorted_chunks:
+                    # Escape single quotes in path
+                    escaped_path = str(chunk['path']).replace("'", "'\\''")
+                    f.write(f"file '{escaped_path}'\n")
+            
+            # Use ffmpeg concat demuxer
+            if crossfade_ms > 0 and len(sorted_chunks) > 1:
+                # Complex filter for crossfade
+                inputs = [ffmpeg.input(str(chunk['path'])) for chunk in sorted_chunks]
+                
+                # Build filter chain for crossfade
+                crossfade_sec = crossfade_ms / 1000.0
+                
+                if len(inputs) == 2:
+                    # Simple case: 2 inputs
+                    merged = ffmpeg.filter([inputs[0], inputs[1]], 'acrossfade', d=crossfade_sec)
+                else:
+                    # Chain crossfades for multiple inputs
+                    merged = inputs[0]
+                    for i in range(1, len(inputs)):
+                        merged = ffmpeg.filter([merged, inputs[i]], 'acrossfade', d=crossfade_sec)
+                
+                stream = ffmpeg.output(merged, str(output_path), acodec='pcm_s16le')
+                ffmpeg.run(stream, overwrite_output=True, quiet=True)
+            else:
+                # Simple concat without crossfade
+                stream = ffmpeg.input(str(concat_file), format='concat', safe=0)
+                stream = ffmpeg.output(stream, str(output_path), acodec='pcm_s16le')
+                ffmpeg.run(stream, overwrite_output=True, quiet=True)
+            
+            # Cleanup concat file
+            concat_file.unlink(missing_ok=True)
+            
+            # Verify output
+            output_probe = ffmpeg.probe(str(output_path))
+            output_duration = float(output_probe['format']['duration'])
+            
+            logger.info(f"Merged audio: {output_duration:.2f}s -> {output_path}")
+            return output_path
+            
+        except Exception as e:
+            logger.error(f"Failed to merge audio chunks: {e}")
+            raise
 

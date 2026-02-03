@@ -306,3 +306,161 @@ class SemanticRAG:
         
         logger.info(f"Generated context: {context}")
         return context
+    
+    def analyze_global(
+        self,
+        all_frame_embeddings: List[np.ndarray],
+        sample_rate: int = 5
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Perform video-level global RAG analysis.
+        Extracts overall domain, terminology, and concepts.
+        
+        Args:
+            all_frame_embeddings: All frame embeddings from the video
+            sample_rate: Sample every Nth frame to reduce computation
+            
+        Returns:
+            Global context dict with domain, concepts, terminology
+        """
+        if not all_frame_embeddings:
+            logger.warning("No frames for global analysis")
+            return None
+        
+        # Sample frames for efficiency
+        sampled = all_frame_embeddings[::sample_rate]
+        logger.info(f"Global RAG: analyzing {len(sampled)} sampled frames (from {len(all_frame_embeddings)})")
+        
+        # Aggregate all frame-to-concept matches
+        all_concept_scores = defaultdict(list)
+        
+        self._ensure_vocab_cached()
+        
+        for frame_emb in sampled:
+            matches = self._match_to_vocabulary(frame_emb, top_k=5)
+            for concept, score in matches:
+                all_concept_scores[concept].append(score)
+        
+        # Calculate mean score and frequency for each concept
+        global_concepts = []
+        for concept, scores in all_concept_scores.items():
+            mean_score = np.mean(scores)
+            frequency = len(scores) / len(sampled)  # How often this concept appears
+            combined_score = mean_score * (0.5 + 0.5 * frequency)  # Blend score and frequency
+            global_concepts.append((concept, combined_score))
+        
+        global_concepts.sort(key=lambda x: x[1], reverse=True)
+        
+        # Deduplicate
+        unique_global = self._deduplicate_concepts(global_concepts[:15])
+        
+        # Get global categories
+        global_categories = self._classify_to_categories(unique_global[:7])
+        
+        # Extract domain and terminology
+        domain = None
+        content_type = None
+        
+        if 'domain' in global_categories and global_categories['domain']:
+            domain = global_categories['domain'][0][0]
+        if 'content_type' in global_categories and global_categories['content_type']:
+            content_type = global_categories['content_type'][0][0]
+        
+        # Build global context
+        global_context = self._build_context(unique_global, global_categories)
+        
+        # Extract key terminology (concepts that appear frequently)
+        terminology = [c for c, s in unique_global[:5]]
+        
+        result = {
+            'concepts': unique_global[:10],
+            'categories': global_categories,
+            'domain': domain,
+            'content_type': content_type,
+            'terminology': terminology,
+            'context': global_context,
+            'frame_count': len(all_frame_embeddings),
+            'sampled_count': len(sampled)
+        }
+        
+        logger.info(f"Global RAG: domain={domain}, content_type={content_type}, "
+                   f"terminology={terminology}")
+        
+        return result
+    
+    def analyze_chunk(
+        self,
+        chunk_frame_embeddings: List[np.ndarray],
+        global_context: Optional[Dict[str, Any]] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Perform chunk-level RAG analysis constrained by global context.
+        
+        Args:
+            chunk_frame_embeddings: Frame embeddings for this chunk
+            global_context: Global context from analyze_global (optional)
+            
+        Returns:
+            Chunk-specific context dict
+        """
+        if not chunk_frame_embeddings:
+            logger.warning("No frames for chunk analysis")
+            return None
+        
+        logger.info(f"Chunk RAG: analyzing {len(chunk_frame_embeddings)} frames")
+        
+        # Match chunk frames to vocabulary
+        chunk_concepts = defaultdict(list)
+        
+        self._ensure_vocab_cached()
+        
+        for frame_emb in chunk_frame_embeddings:
+            matches = self._match_to_vocabulary(frame_emb, top_k=3)
+            for concept, score in matches:
+                chunk_concepts[concept].append(score)
+        
+        # Score and rank
+        scored_concepts = []
+        for concept, scores in chunk_concepts.items():
+            mean_score = np.mean(scores)
+            
+            # Boost if concept appears in global terminology
+            if global_context and concept in global_context.get('terminology', []):
+                mean_score *= 1.3  # 30% boost for global consistency
+            
+            scored_concepts.append((concept, mean_score))
+        
+        scored_concepts.sort(key=lambda x: x[1], reverse=True)
+        
+        # Deduplicate
+        unique_chunk = self._deduplicate_concepts(scored_concepts[:8])
+        
+        # Get chunk-specific categories, constrained by global
+        chunk_categories = self._classify_to_categories(unique_chunk[:5])
+        
+        # Merge with global context
+        merged_context_parts = []
+        
+        if global_context:
+            # Include global domain
+            if global_context.get('domain'):
+                merged_context_parts.append(f"Domain: {global_context['domain']}")
+            if global_context.get('content_type'):
+                merged_context_parts.append(f"Type: {global_context['content_type']}")
+        
+        # Add chunk-specific concepts
+        chunk_concept_str = ", ".join([c for c, _ in unique_chunk[:3]])
+        merged_context_parts.append(f"Scene: {chunk_concept_str}")
+        
+        chunk_context = ". ".join(merged_context_parts) + "."
+        
+        result = {
+            'concepts': unique_chunk[:5],
+            'categories': chunk_categories,
+            'context': chunk_context,
+            'global_aligned': global_context is not None
+        }
+        
+        logger.info(f"Chunk RAG context: {chunk_context}")
+        
+        return result

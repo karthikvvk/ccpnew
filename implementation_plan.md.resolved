@@ -1,0 +1,395 @@
+# Chunk-Based Video Processing Implementation Plan (v2)
+
+## Goal Description
+
+Implement a robust, multi-level chunking pipeline for video translation that addresses:
+- Memory/timeout issues with large files
+- STT accuracy (Whisper optimized for ~30s windows)
+- Boundary continuity (text, audio, video)
+- Failure isolation and recoverability
+- Quality signals for confidence-based retries
+
+---
+
+## User Review Required
+
+> [!IMPORTANT]
+> **Chunk Durations (Configurable)**
+> - Video chunk: 300s (5 min)
+> - Audio sub-chunk: 30s (optimal for Whisper)
+> - Audio overlap: 1.5s (for boundary deduplication)
+
+> [!WARNING]
+> **Breaking Change**: The pipeline output structure will change. Each job will now have a `chunks/` subdirectory with per-chunk artifacts.
+
+---
+
+## Pipeline Architecture
+
+```mermaid
+flowchart TD
+    A[Video Input] --> B[split_video 300s]
+    B --> C[Chunk 1]
+    B --> D[Chunk 2]
+    B --> E[Chunk N...]
+    
+    subgraph ChunkProcessing["Per-Chunk Processing"]
+        C --> F[extract_audio]
+        F --> G[split_audio 30s + 1.5s overlap]
+        G --> H[STT with confidence]
+        H --> I[text_dedup_merge]
+        I --> J[Local RAG]
+        J --> K[Translation]
+        K --> L[TTS]
+        L --> M[chunk_tts.wav]
+    end
+    
+    M --> N[Timeline-Aware Audio Merge]
+    N --> O[Video Reconstruction]
+    O --> P[Validation Checks]
+    P --> Q[Safe Cleanup]
+    Q --> R[Final Video]
+```
+
+---
+
+## Proposed Changes
+
+### config
+#### [MODIFY] [config.py](file:///home/muruga/workspace/ccp_sem6/ccpmerging/ccpnew/config.py)
+Add new chunking configuration parameters:
+```python
+# Chunking settings
+video_chunk_duration: int = 300       # seconds (5 min)
+audio_subchunk_duration: int = 30     # seconds (Whisper optimal)
+audio_overlap: float = 1.5            # seconds
+text_overlap_tokens: int = 20         # for deduplication
+dedup_similarity_threshold: float = 0.85  # cosine similarity
+keep_temp_files: bool = False         # for debugging
+```
+
+---
+
+### modules
+
+#### [MODIFY] [video_processor.py](file:///home/muruga/workspace/ccp_sem6/ccpmerging/ccpnew/modules/video_processor.py)
+Add methods:
+- `split_video(video_path, duration, overlap=0) -> List[Path]`
+  - Splits video into chunks with optional overlap
+  - Returns list of chunk paths
+- `split_audio(audio_path, duration, overlap) -> List[Tuple[Path, float, float]]`
+  - Splits audio into sub-chunks for STT
+  - Returns list of (path, start_time, end_time)
+- `merge_audios_timeline(audio_chunks, timestamps, output_path, crossfade_ms=50) -> Path`
+  - Timeline-aware merge with crossfade
+  - Validates duration continuity
+  - Handles silence gaps
+
+---
+
+#### [NEW] [chunk_manager.py](file:///home/muruga/workspace/ccp_sem6/ccpmerging/ccpnew/modules/chunk_manager.py)
+New module for chunk lifecycle management:
+
+```python
+class ChunkManager:
+    """Manages chunk directories and status tracking"""
+    
+    def __init__(self, job_dir: Path):
+        self.job_dir = job_dir
+        self.chunks_dir = job_dir / 'chunks'
+    
+    def create_chunk(self, chunk_id: int) -> Path:
+        """Create chunk directory structure"""
+        # Returns: chunks/chunk_001/
+        #   ├─ video.mp4
+        #   ├─ audio.wav
+        #   ├─ audio_subchunks/
+        #   ├─ frames/
+        #   ├─ stt.json
+        #   ├─ translation.json
+        #   ├─ tts.wav
+        #   └─ status.json
+    
+    def get_chunk_status(self, chunk_id: int) -> dict:
+        """Read status.json for a chunk"""
+    
+    def update_chunk_status(self, chunk_id: int, stage: str, success: bool, metadata: dict = None):
+        """Update status.json with stage completion info"""
+    
+    def get_failed_chunks(self) -> List[int]:
+        """Return list of chunk IDs that failed"""
+    
+    def get_pending_chunks(self) -> List[int]:
+        """Return list of chunk IDs not yet processed"""
+    
+    def cleanup_chunks(self, keep_failed: bool = True):
+        """Remove chunk artifacts after successful merge"""
+```
+
+---
+
+#### [NEW] [text_dedup.py](file:///home/muruga/workspace/ccp_sem6/ccpmerging/ccpnew/modules/text_dedup.py)
+New module for text deduplication at chunk boundaries:
+
+```python
+class TextDeduplicator:
+    """Handles text overlap deduplication"""
+    
+    def merge_overlapping_segments(
+        self, 
+        segments: List[dict],
+        overlap_tokens: int = 20,
+        similarity_threshold: float = 0.85
+    ) -> List[dict]:
+        """
+        Merge segments from overlapping audio sub-chunks.
+        - Keeps earlier timestamp for duplicates
+        - Uses token-level or embedding similarity
+        """
+    
+    def compute_similarity(self, text1: str, text2: str) -> float:
+        """Compute cosine similarity between text segments"""
+    
+    def align_timestamps(self, segments: List[dict], audio_offset: float) -> List[dict]:
+        """Adjust segment timestamps by audio offset"""
+```
+
+---
+
+#### [MODIFY] [speech_to_text.py](file:///home/muruga/workspace/ccp_sem6/ccpmerging/ccpnew/modules/speech_to_text.py)
+Add:
+- `transcribe_with_confidence(audio_path, language, context_prompt=None) -> dict`
+  - Returns segments with confidence metadata:
+    ```python
+    {
+        'segments': [...],
+        'confidence': {
+            'avg_logprob': float,
+            'no_speech_prob': float,
+            'compression_ratio': float
+        }
+    }
+    ```
+- Accept `initial_prompt` for context carryover (last sentence from previous chunk)
+
+---
+
+#### [MODIFY] [semantic_rag.py](file:///home/muruga/workspace/ccp_sem6/ccpmerging/ccpnew/modules/semantic_rag.py)
+Add hierarchical RAG support:
+- `analyze_global(all_frames) -> GlobalContext`
+  - Run once at video level
+  - Extract overall concepts, domain, terminology
+- `analyze_chunk(chunk_frames, global_context) -> ChunkContext`
+  - Constrained by global context
+  - Reduces hallucination
+
+---
+
+### services
+
+#### [MODIFY] [pipeline.py](file:///home/muruga/workspace/ccp_sem6/ccpmerging/ccpnew/services/pipeline.py)
+Major refactor:
+
+```python
+class TranslationPipeline:
+    def process(self, video_path, target_language, source_language, use_rag):
+        # 1. Get video info
+        video_info = self.video_processor.get_video_info()
+        duration = video_info['duration']
+        
+        # 2. Split video into chunks
+        video_chunks = self.video_processor.split_video(
+            video_path, 
+            duration=settings.video_chunk_duration
+        )
+        
+        # 3. Global RAG (video-level)
+        if use_rag:
+            global_context = self.extract_global_rag(video_path)
+        
+        # 4. Process each chunk
+        chunk_results = []
+        for i, chunk_path in enumerate(video_chunks):
+            result = self.process_chunk(
+                chunk_id=i,
+                chunk_path=chunk_path,
+                target_language=target_language,
+                source_language=source_language,
+                global_context=global_context,
+                previous_context=chunk_results[-1] if chunk_results else None
+            )
+            chunk_results.append(result)
+        
+        # 5. Timeline-aware merge
+        merged_audio = self.merge_chunk_audio(chunk_results)
+        
+        # 6. Reconstruct final video
+        final_video = self.reconstruct_video(video_path, merged_audio)
+        
+        # 7. Validation
+        self.validate_output(final_video, video_info)
+        
+        # 8. Safe cleanup
+        if not settings.keep_temp_files:
+            self.chunk_manager.cleanup_chunks()
+        
+        return result
+    
+    def process_chunk(self, chunk_id, chunk_path, target_language, source_language, 
+                      global_context, previous_context):
+        """
+        Process a single video chunk through the full pipeline.
+        - Idempotent: checks status.json before processing
+        - Captures confidence scores
+        - Passes context from previous chunk
+        """
+        chunk_dir = self.chunk_manager.create_chunk(chunk_id)
+        
+        # Check if already processed
+        status = self.chunk_manager.get_chunk_status(chunk_id)
+        if status.get('completed'):
+            return self.load_chunk_result(chunk_id)
+        
+        try:
+            # Extract audio
+            audio_path = self.extract_chunk_audio(chunk_path, chunk_dir)
+            
+            # Split audio into sub-chunks
+            audio_subchunks = self.video_processor.split_audio(
+                audio_path,
+                duration=settings.audio_subchunk_duration,
+                overlap=settings.audio_overlap
+            )
+            
+            # STT for each sub-chunk with context carryover
+            all_segments = []
+            context_prompt = previous_context.get('last_sentence') if previous_context else None
+            
+            for subchunk_path, start_time, end_time in audio_subchunks:
+                result = self.stt.transcribe_with_confidence(
+                    subchunk_path,
+                    language=source_language,
+                    context_prompt=context_prompt
+                )
+                # Adjust timestamps
+                adjusted = self.text_dedup.align_timestamps(
+                    result['segments'], 
+                    audio_offset=start_time
+                )
+                all_segments.extend(adjusted)
+                
+                # Update context for next sub-chunk
+                if adjusted:
+                    context_prompt = adjusted[-1]['text']
+            
+            # Deduplicate overlapping segments
+            merged_segments = self.text_dedup.merge_overlapping_segments(
+                all_segments,
+                overlap_tokens=settings.text_overlap_tokens,
+                similarity_threshold=settings.dedup_similarity_threshold
+            )
+            
+            # Local RAG (constrained by global)
+            if global_context:
+                local_context = self.rag.analyze_chunk(chunk_dir / 'frames', global_context)
+            
+            # Translation
+            translated = self.translator.translate_segments(
+                merged_segments,
+                target_language,
+                context=local_context
+            )
+            
+            # TTS
+            tts_audio = self.tts.segments_to_speech(translated, chunk_dir / 'tts.wav')
+            
+            # Update status
+            self.chunk_manager.update_chunk_status(
+                chunk_id, 
+                stage='completed', 
+                success=True,
+                metadata={
+                    'segments_count': len(merged_segments),
+                    'last_sentence': merged_segments[-1]['text'] if merged_segments else None,
+                    'tts_path': str(tts_audio)
+                }
+            )
+            
+            return {...}
+            
+        except Exception as e:
+            self.chunk_manager.update_chunk_status(
+                chunk_id, 
+                stage='failed', 
+                success=False,
+                metadata={'error': str(e)}
+            )
+            raise
+```
+
+---
+
+### utils
+
+#### [MODIFY] [file_manager.py](file:///home/muruga/workspace/ccp_sem6/ccpmerging/ccpnew/utils/file_manager.py)
+Add chunk-aware paths:
+- `get_chunk_path(chunk_id, file_type) -> Path`
+
+---
+
+## Verification Plan
+
+### Automated Tests
+1. **Duration validation**: `merged_audio_duration ≈ sum(chunk_durations) - overlaps`
+2. **Timestamp regression check**: No segment has `start > end` or overlaps incorrectly
+3. **Text continuity score**: Measure perplexity/coherence across chunk boundaries
+4. **Confidence thresholds**: Flag chunks with `avg_logprob < -1.0` or `no_speech_prob > 0.5`
+
+### Manual Verification
+- Test with a 10+ minute video
+- Compare output quality vs non-chunked processing
+- Verify retry works for failed chunks
+
+---
+
+## Directory Schema
+
+```
+job_<uuid>/
+├── chunks/
+│   ├── chunk_000/
+│   │   ├── video.mp4
+│   │   ├── audio.wav
+│   │   ├── audio_subchunks/
+│   │   │   ├── subchunk_000.wav
+│   │   │   ├── subchunk_001.wav
+│   │   │   └── ...
+│   │   ├── frames/
+│   │   ├── stt.json           # with confidence metadata
+│   │   ├── translation.json
+│   │   ├── tts.wav
+│   │   └── status.json
+│   ├── chunk_001/
+│   │   └── ...
+│   └── ...
+├── global_rag.json
+├── merged_audio.wav
+├── final_video.mp4
+├── validation.json
+└── manifest.json
+```
+
+---
+
+## Summary of Improvements
+
+| Issue | Solution |
+|-------|----------|
+| Long audio chunks | Audio sub-chunking (30s windows) |
+| Sentence boundary slicing | Overlap + deduplication |
+| Context loss across chunks | Context carryover (last sentence) |
+| RAG noise per chunk | Hierarchical RAG (global → local) |
+| No failure recovery | Idempotent chunks with status.json |
+| Simple audio merge | Timeline-aware merge with crossfade |
+| No quality signals | Confidence scores from Whisper |
+| Unsafe cleanup | Cleanup only after final_video.success |

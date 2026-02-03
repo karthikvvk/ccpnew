@@ -1,0 +1,10 @@
+{
+  "job_id": "test_job",
+  "timestamp": "2026-02-03T12:23:53.946254",
+  "files": {
+    "video_chunks_dir": "/home/muruga/workspace/ccp_sem6/ccpmerging/ccpnew/test_output/test_job/video_chunks",
+    "translated_audio": "/home/muruga/workspace/ccp_sem6/ccpmerging/ccpnew/test_output/test_job/translated_audio.mp3",
+    "synced_audio": "<MagicMock name='VideoProcessor.adjust_audio_speed().resolve()' id='140632722167792'>",
+    "final_video": "/home/muruga/workspace/ccp_sem6/ccpmerging/ccpnew/test_output/test_job/final_video.mp4"
+  }
+}

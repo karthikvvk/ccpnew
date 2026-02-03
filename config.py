@@ -80,6 +80,15 @@ class Settings:
     # RAG configuration
     rag_enable_self_pruning: bool = False
     
+    # Chunking Settings
+    video_chunk_duration: int = 300        # seconds (5 min per video chunk)
+    audio_subchunk_duration: int = 30      # seconds (optimal for Whisper)
+    audio_overlap: float = 1.5             # seconds (overlap between audio sub-chunks)
+    text_overlap_tokens: int = 20          # tokens for text deduplication
+    dedup_similarity_threshold: float = 0.85  # cosine similarity threshold for dedup
+    keep_temp_files: bool = False          # keep chunk artifacts for debugging
+    crossfade_ms: int = 50                 # milliseconds for audio crossfade at joins
+    
     def __post_init__(self):
         """Create directories if they don't exist"""
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -144,6 +153,15 @@ class Settings:
             
             # RAG settings
             rag_enable_self_pruning=config.get("rag", {}).get("enable_self_pruning", False),
+            
+            # Chunking settings
+            video_chunk_duration=config.get("chunking", {}).get("video_chunk_duration", 300),
+            audio_subchunk_duration=config.get("chunking", {}).get("audio_subchunk_duration", 30),
+            audio_overlap=config.get("chunking", {}).get("audio_overlap", 1.5),
+            text_overlap_tokens=config.get("chunking", {}).get("text_overlap_tokens", 20),
+            dedup_similarity_threshold=config.get("chunking", {}).get("dedup_similarity_threshold", 0.85),
+            keep_temp_files=config.get("chunking", {}).get("keep_temp_files", False),
+            crossfade_ms=config.get("chunking", {}).get("crossfade_ms", 50),
         )
 
 
