@@ -1,0 +1,99 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,1,0&display=block');
+@import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=block');
+
+
+@import "tailwindcss";
+
+:root {
+    /* Light Theme (Extracted from AuraFlow Design) */
+    --bg-primary: #FDFDFF;
+    --bg-secondary: #F8FAFC;
+    --bg-surface: #ffffff;
+    --text-primary: #0f172a;
+    /* slate-900 */
+    --text-secondary: #64748b;
+    /* slate-500 */
+    --text-tertiary: #94a3b8;
+    /* slate-400 */
+    --border-subtle: #e2e8f0;
+    /* slate-200 */
+    --accent-primary: #4f46e5;
+    /* indigo-600 */
+    --accent-secondary: #ec4899;
+    /* pink-500 */
+    --glass-bg: rgba(255, 255, 255, 0.7);
+    --glass-border: rgba(255, 255, 255, 0.8);
+    --glass-shadow: rgba(31, 38, 135, 0.04);
+    --nav-bg: rgba(255, 255, 255, 0.4);
+}
+
+.dark {
+    /* Dark Theme (Carbon Design System Inspired) */
+    --bg-primary: #161616;
+    /* Gray 100 */
+    --bg-secondary: #262626;
+    /* Gray 90 */
+    --bg-surface: #121212;
+    /* Nearly Black */
+    --text-primary: #f4f4f4;
+    /* Gray 10 */
+    --text-secondary: #c6c6c6;
+    /* Gray 30 */
+    --text-tertiary: #8d8d8d;
+    /* Gray 50 */
+    --border-subtle: #393939;
+    /* Gray 80 */
+    --accent-primary: #78a9ff;
+    /* Blue 40 */
+    --accent-secondary: #ff7eb6;
+    /* Magenta 40 */
+    --glass-bg: rgba(38, 38, 38, 0.6);
+    --glass-border: rgba(255, 255, 255, 0.1);
+    --glass-shadow: rgba(0, 0, 0, 0.4);
+    --nav-bg: rgba(22, 22, 22, 0.4);
+}
+
+body {
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    transition: background-color 0.3s cubic-bezier(0.2, 0, 0.2, 1), color 0.3s cubic-bezier(0.2, 0, 0.2, 1);
+}
+
+/* Global Utility Classes using Variables */
+.bg-theme-primary {
+    background-color: var(--bg-primary);
+}
+
+.bg-theme-secondary {
+    background-color: var(--bg-secondary);
+}
+
+.bg-theme-surface {
+    background-color: var(--bg-surface);
+}
+
+.text-theme-primary {
+    color: var(--text-primary);
+}
+
+.text-theme-secondary {
+    color: var(--text-secondary);
+}
+
+.border-theme {
+    border-color: var(--border-subtle);
+}
+
+.glass-theme {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    box-shadow: 0 8px 32px 0 var(--glass-shadow);
+    backdrop-filter: blur(12px);
+}
+
+.nav-glass {
+    background-color: var(--nav-bg);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border-subtle);
+}
