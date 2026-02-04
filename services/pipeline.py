@@ -5,6 +5,7 @@ FLOW: Video Split -> Global RAG -> Chunked (STT -> Local RAG -> Translate -> TTS
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import json
+import concurrent.futures
 import numpy as np
 from utils.logger import setup_logger
 from utils.file_manager import FileManager
@@ -108,6 +109,30 @@ class TranslationPipeline:
             
             # 3. Process Chunks
             logger.info(f"Step 3: Processing {len(video_chunks)} chunks...")
+            
+            # 3a. Parallel Asset Preparation (IO Bound)
+            logger.info("Step 3a: Preparing chunk assets in parallel...")
+            chunk_assets_map = {}
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=settings.streaming_buffer_size) as executor:
+                # Submit all preparation tasks
+                future_to_chunk = {
+                    executor.submit(self.prepare_chunk_assets, chunk_info['chunk_id'], chunk_info['path']): chunk_info['chunk_id']
+                    for chunk_info in video_chunks
+                }
+                
+                for future in concurrent.futures.as_completed(future_to_chunk):
+                    chunk_id = future_to_chunk[future]
+                    try:
+                        assets_info = future.result()
+                        chunk_assets_map[chunk_id] = assets_info
+                        logger.info(f"Prepared assets for chunk {chunk_id}")
+                    except Exception as exc:
+                        logger.error(f"Asset preparation failed for chunk {chunk_id}: {exc}")
+                        raise
+
+            # 3b. Sequential AI Processing (GPU Bound)
+            logger.info("Step 3b: Running AI inference on chunks...")
             chunk_results = []
             previous_context = {}  # For context carryover
             
@@ -125,6 +150,11 @@ class TranslationPipeline:
                 chunk_id = chunk_info['chunk_id']
                 logger.info(f"--- Processing Chunk {chunk_id+1}/{len(video_chunks)} ---")
                 
+                # Get pre-prepared assets
+                assets = chunk_assets_map.get(chunk_id)
+                if not assets:
+                    raise RuntimeError(f"Assets not found for chunk {chunk_id}")
+
                 result = self.process_chunk(
                     chunk_id=chunk_id,
                     chunk_video_path=chunk_info['path'],
@@ -134,7 +164,8 @@ class TranslationPipeline:
                     previous_context=previous_context,
                     stt_model=stt,
                     translator_model=translator,
-                    embedder=embedder
+                    embedder=embedder,
+                    pre_prepared_assets=assets
                 )
                 
                 chunk_results.append(result)
@@ -236,6 +267,60 @@ class TranslationPipeline:
             logger.warning(f"Global RAG failed, proceeding without it: {e}")
             return None
 
+    def prepare_chunk_assets(self, chunk_id: int, chunk_video_path: Path) -> Dict[str, Any]:
+        """
+        Prepare assets (Audio/Frames) for a chunk in parallel (IO/CPU bound)
+        """
+        chunk_dir = self.chunk_manager.create_chunk(chunk_id)
+        
+        # Check if already completed
+        status = self.chunk_manager.get_chunk_status(chunk_id)
+        if status.get('completed'):
+            return {'completed': True}
+
+        try:
+            self.chunk_manager.update_chunk_status(chunk_id, 'preparing', True)
+            
+            # 1. Extract Audio
+            vp = self.video_processor(chunk_video_path)
+            chunk_audio_path = chunk_dir / 'audio.wav'
+            if not chunk_audio_path.exists():
+                vp.extract_audio(chunk_audio_path)
+            
+            # 2. Extract Frames for Local RAG
+            chunk_frames_dir = chunk_dir / 'frames'
+            if not chunk_frames_dir.exists() or not list(chunk_frames_dir.glob('*.jpg')):
+                vp.extract_frames(chunk_frames_dir, fps=settings.frame_extract_fps)
+            
+            # 3. Split Audio into Sub-chunks
+            audio_subchunks_dir = chunk_dir / 'audio_subchunks'
+            # Always run split_audio to get the list (it checks existence internally or we assume fast)
+            # Actually split_audio uses ffmpeg, so we should check if done.
+            # But split_audio returns the list we need.
+            # We can rely on split_audio being idempotent-ish or fast if files exist? 
+            # The current impl of split_audio overwrites.
+            # Let's assume for now we run it.
+            
+            audio_subchunks = self.video_processor.split_audio(
+                chunk_audio_path,
+                duration=settings.audio_subchunk_duration,
+                overlap=settings.audio_overlap,
+                output_dir=audio_subchunks_dir
+            )
+            
+            return {
+                'chunk_id': chunk_id,
+                'chunk_dir': str(chunk_dir),
+                'audio_path': str(chunk_audio_path),
+                'frames_dir': str(chunk_frames_dir),
+                'audio_subchunks': audio_subchunks,
+                'subchunks_ready': True
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to prepare assets for chunk {chunk_id}: {e}")
+            raise
+
     def process_chunk(self,
                       chunk_id: int,
                       chunk_video_path: Path,
@@ -245,7 +330,8 @@ class TranslationPipeline:
                       previous_context: Dict[str, Any],
                       stt_model: SpeechToText,
                       translator_model: Translator,
-                      embedder: FrameEmbedder = None) -> Dict[str, Any]:
+                      embedder: FrameEmbedder = None,
+                      pre_prepared_assets: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Process a single video chunk
         """
@@ -261,26 +347,29 @@ class TranslationPipeline:
                 'tts_path': self.chunk_manager.get_chunk_audio_path(chunk_id),
                 'metadata': status.get('metadata', {})
             }
-            
         try:
-            self.chunk_manager.update_chunk_status(chunk_id, 'started', True)
+            self.chunk_manager.update_chunk_status(chunk_id, 'processing', True)
             
-            # 1. Extract Audio
-            vp = self.video_processor(chunk_video_path)
-            chunk_audio_path = chunk_dir / 'audio.wav'
-            vp.extract_audio(chunk_audio_path)
-            
-            # 2. Extract Frames for Local RAG
-            chunk_frames_dir = chunk_dir / 'frames'
-            vp.extract_frames(chunk_frames_dir, fps=settings.frame_extract_fps)
-            
-            # 3. Split Audio into Sub-chunks
-            audio_subchunks = self.video_processor.split_audio(
-                chunk_audio_path,
-                duration=settings.audio_subchunk_duration,
-                overlap=settings.audio_overlap,
-                output_dir=chunk_dir / 'audio_subchunks'
-            )
+            # Load assets from pre-prepared info or re-derive if needed
+            if pre_prepared_assets:
+                chunk_audio_path = Path(pre_prepared_assets['audio_path'])
+                chunk_frames_dir = Path(pre_prepared_assets['frames_dir'])
+                audio_subchunks = pre_prepared_assets['audio_subchunks']
+            else:
+                # Fallback to serial execution if no pre-prepared assets
+                vp = self.video_processor(chunk_video_path)
+                chunk_audio_path = chunk_dir / 'audio.wav'
+                vp.extract_audio(chunk_audio_path)
+                
+                chunk_frames_dir = chunk_dir / 'frames'
+                vp.extract_frames(chunk_frames_dir, fps=settings.frame_extract_fps)
+                
+                audio_subchunks = self.video_processor.split_audio(
+                    chunk_audio_path,
+                    duration=settings.audio_subchunk_duration,
+                    overlap=settings.audio_overlap,
+                    output_dir=chunk_dir / 'audio_subchunks'
+                )
             
             # 4. Transcribe Sub-chunks
             all_segments = []
