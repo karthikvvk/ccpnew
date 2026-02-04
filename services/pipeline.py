@@ -114,6 +114,8 @@ class TranslationPipeline:
             # Initialize STT/TTS models once
             stt = SpeechToText()
             translator = Translator()
+            # Initialize Embedder once (if needed for local RAG)
+            embedder = FrameEmbedder() if use_rag else None
             
             if settings.use_voice_cloning:
                 # We need voice cloner, but maybe we only init it inside process_chunk or pass it
@@ -131,7 +133,8 @@ class TranslationPipeline:
                     global_context=global_context,
                     previous_context=previous_context,
                     stt_model=stt,
-                    translator_model=translator
+                    translator_model=translator,
+                    embedder=embedder
                 )
                 
                 chunk_results.append(result)
@@ -241,7 +244,8 @@ class TranslationPipeline:
                       global_context: Dict[str, Any],
                       previous_context: Dict[str, Any],
                       stt_model: SpeechToText,
-                      translator_model: Translator) -> Dict[str, Any]:
+                      translator_model: Translator,
+                      embedder: FrameEmbedder = None) -> Dict[str, Any]:
         """
         Process a single video chunk
         """
@@ -319,7 +323,10 @@ class TranslationPipeline:
             local_context = None
             if global_context: # Only do local if RAG enabled (implied by global_context presence if use_rag=True)
                 # Need embedding for frames
-                embedder = FrameEmbedder() # Initialize locally to save VRAM if needed, or pass
+                if embedder is None:
+                    # Fallback if not passed (shouldn't happen with updated calls)
+                    embedder = FrameEmbedder() 
+                
                 frame_embeddings = embedder.embed_frames(chunk_frames_dir)
                 embeddings = [fe[1] for fe in frame_embeddings]
                 

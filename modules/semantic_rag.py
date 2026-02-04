@@ -127,15 +127,30 @@ class SemanticRAG:
         """
         self._ensure_vocab_cached(candidate_words)
         
+        # Filter words that have embeddings
+        valid_words = [w for w in candidate_words if w in self._vocab_embeddings]
+        if not valid_words:
+            return []
+            
+        # Stack embeddings: Shape (N_words, Emb_dim)
+        word_matrix = np.stack([self._vocab_embeddings[w] for w in valid_words])
+        
+        # Normalize word embeddings (if not already normalized, but let's be safe)
+        word_norms = np.linalg.norm(word_matrix, axis=1, keepdims=True)
+        word_matrix = word_matrix / (word_norms + 1e-9)
+        
+        # Normalize frame embedding
+        frame_norm = np.linalg.norm(frame_embedding)
+        frame_vec = frame_embedding / (frame_norm + 1e-9)
+        
+        # Batch dot product: (N_words, D) @ (D,) -> (N_words,)
+        scores = np.dot(word_matrix, frame_vec)
+        
+        # Filter results
         verified_matches = []
-        for word in candidate_words:
-            word_emb = self._vocab_embeddings.get(word)
-            if word_emb is None:
-                continue
-                
-            score = self._cosine_similarity(frame_embedding, word_emb)
+        for word, score in zip(valid_words, scores):
             if score >= threshold:
-                verified_matches.append((word, score))
+                verified_matches.append((word, float(score)))
         
         # Sort by score descending
         verified_matches.sort(key=lambda x: x[1], reverse=True)
