@@ -8,7 +8,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'https://vanilla-build-black-saw.trycloudflare.com',
+        target: 'https://webcast-nationally-safe-supplemental.trycloudflare.com',
         changeOrigin: true,
       }
     }

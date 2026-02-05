@@ -10,6 +10,7 @@ import {
   Clock, HardDrive, Cpu, MousePointer2, Command, Bell, Upload, Loader2,
   Scissors, GripVertical, Move
 } from 'lucide-react';
+import api from './services/api';
 
 const AuraFlowStudioPro = () => {
   const { isDark } = useTheme();
@@ -33,12 +34,10 @@ const AuraFlowStudioPro = () => {
   const [activeMagic, setActiveMagic] = useState(null);
 
   // --- VIDEO LOADING STATES ---
-  const [videoId, setVideoId] = useState('Trump'); // Default video ID
   const [jobStatus, setJobStatus] = useState('idle');
   const [jobProgress, setJobProgress] = useState('');
   const [convertedVideoUrl, setConvertedVideoUrl] = useState(null);
   const videoRef = useRef(null);
-  const DIRECT_VIDEO_URL = (id) => `http://localhost:5000/api/v1/${id}/download/video`;
 
   const [expandedSections, setExpandedSections] = useState({
     videos: true,
@@ -54,6 +53,7 @@ const AuraFlowStudioPro = () => {
   const [duration, setDuration] = useState(180);
   const timelineRef = useRef(null);
   const fileInputRef = useRef(null);
+  const uploadInputRef = useRef(null);
   const [activeTrackIdForAdd, setActiveTrackIdForAdd] = useState(null);
 
   // --- EDITING STATES ---
@@ -510,13 +510,30 @@ const AuraFlowStudioPro = () => {
     document.addEventListener('mouseup', handleMouseUp);
   };
 
-  const handleLoadVideo = () => {
+  const handleMainVideoUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
     try {
       setJobStatus('loading');
-      setJobProgress('Loading video from server...');
+      setJobProgress('Uploading video...');
 
-      // Construct video URL
-      const videoUrl = DIRECT_VIDEO_URL(videoId);
+      // 1. Upload Video
+      const uploadResult = await api.uploadVideo(file, activeLang);
+      const jobId = uploadResult.job_id;
+
+      setJobStatus('loading');
+      setJobProgress('Processing video with AI...');
+
+      // 2. Poll for completion
+      await api.pollJobStatus(jobId, (status, progress) => {
+        setJobProgress(`Processing: ${status} - ${progress || '...'}`);
+      });
+
+      setJobProgress('Finalizing...');
+
+      // 3. Get Download URL
+      const videoUrl = api.getDownloadUrl(jobId, 'video');
 
       // Set the URL to trigger video load
       setConvertedVideoUrl(videoUrl);
@@ -530,10 +547,10 @@ const AuraFlowStudioPro = () => {
           muted: false,
           clips: [
             {
-              id: `v1-${videoId}`,
+              id: `v1-${jobId}`,
               startTime: 0,
               endTime: duration || 180,
-              label: `${videoId}.mp4`,
+              label: file.name,
               src: videoUrl,
               originalSrc: videoUrl,
               sourceStartTime: 0,
@@ -549,7 +566,7 @@ const AuraFlowStudioPro = () => {
           muted: false,
           clips: [
             {
-              id: `a1-${videoId}`,
+              id: `a1-${jobId}`,
               startTime: 0,
               endTime: duration || 180,
               label: 'Original Audio',
@@ -571,16 +588,19 @@ const AuraFlowStudioPro = () => {
       ]);
 
       setJobStatus('completed');
-      setJobProgress('Video loaded successfully!');
+      setJobProgress('Video processed successfully!');
 
       // Clear progress message after 2 seconds
       setTimeout(() => {
         setJobProgress('');
       }, 2000);
+
     } catch (error) {
       setJobStatus('failed');
-      setJobProgress('Failed to load video');
-      console.error('Video load error:', error);
+      setJobProgress(`Error: ${error.message}`);
+      console.error('Video processing error:', error);
+    } finally {
+      e.target.value = null; // Reset input
     }
   };
 
@@ -1257,16 +1277,10 @@ const AuraFlowStudioPro = () => {
         <div className="p-8 space-y-10 overflow-y-auto flex-1 scrollbar-hide">
           <section>
             <div className="flex justify-between items-center mb-6">
-              <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em]">Video ID</h3>
+              <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em]">Source Video</h3>
             </div>
-            <input
-              type="text"
-              value={videoId}
-              onChange={(e) => setVideoId(e.target.value)}
-              placeholder="Enter video ID (e.g., Trump)"
-              className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
-            />
-            <p className="text-[10px] text-slate-400 mt-2 font-medium">Video must exist as {videoId}.mp4 in backend videos folder</p>
+            {/* NO VIDEO ID INPUT anymore */}
+            <p className="text-[10px] text-slate-400 mt-2 font-medium">Select a video to upload and process</p>
           </section>
 
           <section>
@@ -1325,7 +1339,7 @@ const AuraFlowStudioPro = () => {
 
           {/* Load video button */}
           <button
-            onClick={handleLoadVideo}
+            onClick={() => uploadInputRef.current?.click()}
             disabled={jobStatus === 'loading'}
             className={`w-full py-4 rounded-[20px] text-[12px] font-black uppercase tracking-[0.1em] shadow-xl transition-all active:scale-95 flex items-center justify-center gap-3 group ${jobStatus === 'loading'
               ? 'bg-slate-400 text-white cursor-not-allowed'
@@ -1333,8 +1347,8 @@ const AuraFlowStudioPro = () => {
               }`}
           >
             {jobStatus === 'loading' && <Loader2 size={16} className="animate-spin" />}
-            {jobStatus === 'loading' ? 'Loading Video...' : 'Load Video from Server'}
-            {jobStatus === 'idle' && <ChevronRightIcon size={16} className="group-hover:translate-x-1 transition-transform" />}
+            {jobStatus === 'loading' ? 'Processing Video...' : 'Upload & Process New Video'}
+            {jobStatus === 'idle' && <Upload size={16} className="group-hover:-translate-y-1 transition-transform" />}
           </button>
         </div>
       </aside>
@@ -1355,6 +1369,15 @@ const AuraFlowStudioPro = () => {
         onChange={handleFileSelect}
         className="hidden"
         accept="video/*,audio/*,image/*"
+      />
+
+      {/* Hidden File Input for Main Video Upload */}
+      <input
+        type="file"
+        ref={uploadInputRef}
+        onChange={handleMainVideoUpload}
+        className="hidden"
+        accept="video/*"
       />
     </div>
   );
