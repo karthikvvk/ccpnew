@@ -125,12 +125,24 @@ class TextDeduplicator:
             # No clear overlap, concatenate
             merged_text = text1 + ' ' + text2
         
+        # Calculate merged confidence metrics (Conservative approach)
+        # Take minimum logprob (worst confidence) and maximum no_speech_prob
+        logprob1 = seg1.get('avg_logprob', 0.0)
+        logprob2 = seg2.get('avg_logprob', 0.0)
+        merged_logprob = min(logprob1, logprob2)
+        
+        nsp1 = seg1.get('no_speech_prob', 0.0)
+        nsp2 = seg2.get('no_speech_prob', 0.0)
+        merged_nsp = max(nsp1, nsp2)
+
         return {
             'start': seg1['start'],
             'end': max(seg1['end'], seg2['end']),
             'text': merged_text.strip(),
             'merged': True,
-            'original_segments': [seg1, seg2]
+            'original_segments': [seg1, seg2],
+            'avg_logprob': merged_logprob,
+            'no_speech_prob': merged_nsp
         }
     
     def compute_similarity(

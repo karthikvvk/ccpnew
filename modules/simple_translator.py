@@ -114,8 +114,15 @@ class Translator:
         """
         domain_info = f"Domain context: {context}" if context else "Domain: general conversation"
         
+        # Updated Prompt Construction with Stronger Instructions
         prompt = f"""<|begin_of_text|><|start_header_id|>system<|end_header_id|>
 You are a professional translator specializing in Tamil to {target_language} translation.
+
+CRITICAL INSTRUCTION:
+Your PRIMARY source of truth is the "Source Text" provided below. You must translate exactly what is said.
+The "Domain Context" is provided ONLY to help with specific terminology or background understanding.
+NEVER let the "Domain Context" override or change the meaning of the "Source Text".
+
 {domain_info}
 
 Rules:
@@ -129,6 +136,84 @@ Translate this Tamil text to {target_language}:
 <|eot_id|><|start_header_id|>assistant<|end_header_id|>
 """
         return prompt
+
+    def _calculate_confidence(self, segment: Dict[str, Any]) -> float:
+        """
+        Calculate confidence score for a segment based on ASR metadata.
+        
+        Args:
+           segment: Dictionary containing segment data including 'avg_logprob'
+           
+        Returns:
+           float: 0.0 to 1.0 confidence score
+        """
+        # Default high confidence if no metadata
+        if 'avg_logprob' not in segment:
+            return 1.0
+            
+        avg_logprob = segment.get('avg_logprob', 0.0)
+        no_speech_prob = segment.get('no_speech_prob', 0.0)
+        
+        # Whisper logprobs are typically -1.0 to 0.0 for good transcription
+        # Lower means less confident. -1.0 is ~37% prob, -0.5 is ~60%, 0.0 is 100%
+        # Normalize logprob to roughly 0-1 scale
+        # Simple heuristic: map -2.0...0.0 to 0.0...1.0
+        logprob_score = max(0.0, min(1.0, (avg_logprob + 2.0) / 2.0))
+        
+        # Penalize for high no_speech_probability
+        confidence = logprob_score * (1.0 - no_speech_prob)
+        
+        return confidence
+        
+    def _verify_consistency(self, source_text: str, translation: str) -> bool:
+        """
+        Verify if translation is semantically consistent with source (hallucination check).
+        
+        Args:
+            source_text: Original source text
+            translation: Generated translation
+            
+        Returns:
+            bool: True if consistent, False if likely hallucinated/drifted
+        """
+        try:
+            check_prompt = f"""<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+You are a strict quality control verifier.
+Check if the translation contains information NOT present in the source text.
+Answer only YES or NO.
+
+Source: {source_text}
+Translation: {translation}
+
+Does the translation contain hallucinated information?
+<|eot_id|><|start_header_id|>assistant<|end_header_id|>"""
+            
+            inputs = self.tokenizer(
+                check_prompt, 
+                return_tensors="pt",
+                truncation=True,
+                max_length=self.max_length
+            ).to(self.model.device)
+            
+            with torch.no_grad():
+                outputs = self.model.generate(
+                    **inputs,
+                    max_new_tokens=10,
+                    temperature=0.0
+                )
+                
+            result = self.tokenizer.decode(outputs[0], skip_special_tokens=True).strip().upper()
+            
+            # If answer is YES, it means hallucination detected -> Not consistent
+            if "YES" in result:
+                logger.warning(f"Hallucination detected in translation for: '{source_text[:30]}...'")
+                return False
+                
+            return True
+            
+        except Exception as e:
+            logger.error(f"Verification failed: {e}")
+            return True # Assume okay on error to optimize for speed
     
     def translate_text(self, text: str, target_language: str, context: str = None) -> str:
         """
@@ -215,18 +300,43 @@ Translate this Tamil text to {target_language}:
             # Use refined text if available, otherwise original
             text_to_translate = segment.get('refined', segment.get('text', ''))
             
+            # Calculate confidence
+            confidence = self._calculate_confidence(segment)
+            
+            # Decide on RAG usage (User logic: < 0.6 use RAG, else skip)
+            use_rag = confidence < 0.6
+            
+            current_context = context if use_rag else None
+            
+            if use_rag:
+                logger.info(f"Low confidence ({confidence:.2f}), utilizing RAG context")
+            
             translated_text = self.translate_text(
                 text_to_translate, 
                 target_language, 
-                context=context
+                context=current_context
             )
+            
+            # Verification Pass
+            is_consistent = self._verify_consistency(text_to_translate, translated_text)
+            
+            if not is_consistent and use_rag:
+                logger.warning("Translation failed verification. Regenerating WITHOUT RAG context.")
+                # Fallback: Retry without RAG
+                translated_text = self.translate_text(
+                    text_to_translate,
+                    target_language,
+                    context=None # Force no RAG
+                )
             
             translated_segments.append({
                 'start': segment['start'],
                 'end': segment['end'],
                 'original': segment.get('original', segment.get('text', '')),
                 'refined': segment.get('refined', ''),
-                'translated': translated_text
+                'translated': translated_text,
+                'confidence': confidence,
+                'is_consistent': is_consistent
             })
             
             if (i + 1) % 5 == 0:
