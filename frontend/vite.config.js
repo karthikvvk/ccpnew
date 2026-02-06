@@ -8,7 +8,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'https://improving-desperate-add-incoming.trycloudflare.com ',
+        target: 'https://wto-rules-consultation-gif.trycloudflare.com',
         changeOrigin: true,
       }
     }
