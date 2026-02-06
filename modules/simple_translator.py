@@ -199,7 +199,7 @@ Does the translation contain hallucinated information?
                 outputs = self.model.generate(
                     **inputs,
                     max_new_tokens=10,
-                    temperature=0.0
+                    do_sample=False
                 )
                 
             result = self.tokenizer.decode(outputs[0], skip_special_tokens=True).strip().upper()
@@ -304,7 +304,8 @@ Does the translation contain hallucinated information?
             confidence = self._calculate_confidence(segment)
             
             # Decide on RAG usage (User logic: < 0.6 use RAG, else skip)
-            use_rag = confidence < 0.6
+            # RAG DISABLED GLOBALLY
+            use_rag = False # confidence < 0.6
             
             current_context = context if use_rag else None
             

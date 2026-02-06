@@ -81,7 +81,7 @@ async def translate_video(
     video: UploadFile = File(...),
     target_language: str = Form(...),
     source_language: str = Form("auto"),
-    use_rag: bool = Form(True)
+    use_rag: bool = Form(False)
 ):
     """
     Translate video to target language

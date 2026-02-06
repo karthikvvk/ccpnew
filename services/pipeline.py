@@ -76,6 +76,9 @@ class TranslationPipeline:
         Process video translation using robust chunking pipeline
         """
         try:
+            # FORCE DISABLE RAG
+            use_rag = False
+            
             logger.info(f"Starting chunk-based translation pipeline")
             logger.info(f"  Video: {video_path}")
             logger.info(f"  Target: {target_language}")
