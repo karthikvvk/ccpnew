@@ -13,7 +13,7 @@ const API_BASE = '/api/v1';
  * @param {boolean} useRag - Whether to use RAG context (default: true)
  * @returns {Promise<{job_id: string, status: string, message: string}>}
  */
-export async function uploadVideo(videoFile, targetLanguage, sourceLanguage = 'auto', useRag = true) {
+export async function uploadVideo(videoFile, targetLanguage, sourceLanguage = 'auto', useRag = false) {
     const formData = new FormData();
     formData.append('video', videoFile);
     formData.append('target_language', targetLanguage);

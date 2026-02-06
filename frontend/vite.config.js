@@ -8,7 +8,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'https://webcast-nationally-safe-supplemental.trycloudflare.com',
+        target: 'https://advertising-permission-tattoo-affiliate.trycloudflare.com',
         changeOrigin: true,
       }
     }
