@@ -376,7 +376,8 @@ class TranslationPipeline:
             
             # 4. Transcribe Sub-chunks
             all_segments = []
-            context_prompt = previous_context.get('last_sentence')
+            # DISABLE CONTEXT PROMPT
+            context_prompt = None # previous_context.get('last_sentence')
             
             for sub_info in audio_subchunks:
                 sub_path = sub_info['path']
@@ -385,7 +386,7 @@ class TranslationPipeline:
                 transcription = stt_model.transcribe_with_confidence(
                     sub_path,
                     language=source_language,
-                    context_prompt=context_prompt
+                    context_prompt=None # Force None
                 )
                 
                 # Check confidence
@@ -402,8 +403,9 @@ class TranslationPipeline:
                 all_segments.extend(aligned_segments)
                 
                 # Update prompt for next sub-chunk
+                # DISABLE CONTEXT UPDATE
                 if transcription.get('text'):
-                    context_prompt = transcription['text']  # Use full text as prompt
+                     pass # context_prompt = transcription['text']  # Use full text as prompt
             
             # 5. Deduplicate Text
             merged_segments = self.text_dedup.merge_overlapping_segments(

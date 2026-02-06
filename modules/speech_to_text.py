@@ -198,7 +198,7 @@ class SpeechToText:
                 verbose=False,
                 temperature=0.0,
                 word_timestamps=True,
-                condition_on_previous_text=True,  # Enable for context continuity
+                condition_on_previous_text=False,  # Enable for context continuity
                 fp16=(self.device == "cuda")
             )
             
