@@ -9,7 +9,7 @@ from gtts import gTTS
 import argparse
 import os
 
-def generate_speech(text, output_file="output.mp3", lang="en", slow=False):
+def generate_speech(text, output_file="output.mp3", lang="en", slow=True):
     """
     Convert text to speech and save to file.
     """

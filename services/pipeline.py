@@ -19,6 +19,7 @@ from modules.chunk_manager import ChunkManager
 from modules.text_dedup import TextDeduplicator
 from modules.voice_cloner import VoiceCloner, get_language_code
 from config import settings
+from modules import audiosep
 
 logger = setup_logger("pipeline")
 
@@ -290,6 +291,31 @@ class TranslationPipeline:
             if not chunk_audio_path.exists():
                 vp.extract_audio(chunk_audio_path)
             
+            # 1b. Separate Audio (Vocals only)
+            logger.info(f"Separating audio for chunk {chunk_id}...")
+            # We want to use the separated vocals for STT, so we'll update chunk_audio_path
+            # The separation output will be in chunk_dir/separated/htdemucs/audio/vocals.wav by default
+            # But the audiosep script structure puts it in output_dir/model_name/source_name/vocals.wav
+            
+            sep_output_dir = chunk_dir / 'separated'
+            success = audiosep.separate_audio(
+                input_file=str(chunk_audio_path),
+                output_dir=str(sep_output_dir),
+                vocals_only=True
+            )
+            
+            if success:
+                # Construct path to vocals
+                # The input file stem is 'audio'
+                vocals_path = sep_output_dir / 'htdemucs' / 'audio' / 'vocals.wav'
+                if vocals_path.exists():
+                    logger.info(f"Using separated vocals for STT: {vocals_path}")
+                    chunk_audio_path = vocals_path
+                else:
+                    logger.warning(f"Vocals file not found at {vocals_path}, using original audio")
+            else:
+                 logger.warning("Audio separation failed, using original audio")
+            
             # 2. Extract Frames for Local RAG
             chunk_frames_dir = chunk_dir / 'frames'
             if not chunk_frames_dir.exists() or not list(chunk_frames_dir.glob('*.jpg')):
@@ -363,6 +389,21 @@ class TranslationPipeline:
                 vp = self.video_processor(chunk_video_path)
                 chunk_audio_path = chunk_dir / 'audio.wav'
                 vp.extract_audio(chunk_audio_path)
+                
+                # Separate Audio (Fallback path)
+                logger.info(f"Separating audio for chunk {chunk_id} (fallback)...")
+                sep_output_dir = chunk_dir / 'separated'
+                success = audiosep.separate_audio(
+                    input_file=str(chunk_audio_path),
+                    output_dir=str(sep_output_dir),
+                    vocals_only=True
+                )
+                
+                if success:
+                    vocals_path = sep_output_dir / 'htdemucs' / 'audio' / 'vocals.wav'
+                    if vocals_path.exists():
+                        logger.info(f"Using separated vocals for STT: {vocals_path}")
+                        chunk_audio_path = vocals_path
                 
                 chunk_frames_dir = chunk_dir / 'frames'
                 vp.extract_frames(chunk_frames_dir, fps=settings.frame_extract_fps)
