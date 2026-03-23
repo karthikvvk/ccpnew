@@ -50,5 +50,11 @@
   },
   "rag": {
     "enable_self_pruning": false
+  },
+  "api_keys": {
+    "groq": ""
+  },
+  "demo": {
+    "use_api_mode": true
   }
 }

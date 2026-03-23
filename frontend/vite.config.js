@@ -8,7 +8,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'https://allied-absorption-blacks-ethernet.trycloudflare.com',
+        target: 'https://introduce-ashley-housewives-encryption.trycloudflare.com',
         changeOrigin: true,
       }
     }

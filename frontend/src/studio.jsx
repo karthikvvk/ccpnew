@@ -11,6 +11,7 @@ import {
   Scissors, GripVertical, Move
 } from 'lucide-react';
 import api from './services/api';
+import apiMode from './services/apiMode';
 
 const AuraFlowStudioPro = () => {
   const { isDark } = useTheme();
@@ -37,6 +38,7 @@ const AuraFlowStudioPro = () => {
   const [jobStatus, setJobStatus] = useState('idle');
   const [jobProgress, setJobProgress] = useState('');
   const [convertedVideoUrl, setConvertedVideoUrl] = useState(null);
+  const [processingMode, setProcessingMode] = useState('backend'); // 'backend' | 'api'
   const videoRef = useRef(null);
 
   const [expandedSections, setExpandedSections] = useState({
@@ -510,10 +512,84 @@ const AuraFlowStudioPro = () => {
     document.addEventListener('mouseup', handleMouseUp);
   };
 
+  // ─── API MODE PIPELINE HANDLER ─────────────────────────────────────
+  // Runs when processingMode === 'api': calls OpenAI Whisper, GPT, TTS
+  // via thin backend helpers. Backend AI pipeline is never touched.
+  const handleApiModeUpload = async (file) => {
+    try {
+      setJobStatus('loading');
+      setJobProgress('🔑 Loading API key...');
+
+      const result = await apiMode.runApiModePipeline(
+        file,
+        activeLang,
+        (msg) => setJobProgress(msg),
+      );
+
+      setConvertedVideoUrl(result.videoUrl);
+
+      // Populate timeline tracks
+      setTracks(prev => [
+        {
+          id: 'video-1',
+          type: 'video',
+          label: 'Video Track',
+          muted: false,
+          clips: [{
+            id: `v1-${result.jobId}`,
+            startTime: 0,
+            endTime: duration || 180,
+            label: file.name,
+            src: result.videoUrl,
+            originalSrc: result.videoUrl,
+            sourceStartTime: 0,
+            sourceEndTime: duration || 180,
+            color: 'bg-gradient-to-r from-violet-400 to-purple-500',
+          }],
+        },
+        {
+          id: 'audio-1',
+          type: 'audio',
+          label: 'AI Dubbed Audio',
+          muted: false,
+          clips: [{
+            id: `a1-${result.jobId}`,
+            startTime: 0,
+            endTime: duration || 180,
+            label: 'OpenAI TTS',
+            src: result.videoUrl,
+            originalSrc: result.videoUrl,
+            sourceStartTime: 0,
+            sourceEndTime: duration || 180,
+            color: 'bg-gradient-to-r from-violet-400 to-fuchsia-500',
+          }],
+        },
+        { id: 'caption-1', type: 'caption', label: 'Captions', muted: false, clips: [] },
+      ]);
+
+      setJobStatus('completed');
+      setTimeout(() => setJobProgress(''), 3000);
+
+    } catch (err) {
+      setJobStatus('failed');
+      setJobProgress(`❌ ${err.message}`);
+      console.error('API mode pipeline error:', err);
+    }
+  };
+
+  // ─── UNIFIED UPLOAD HANDLER ─────────────────────────────────────
+  // Dispatches to backend or API mode based on the mode switcher
   const handleMainVideoUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
+    if (processingMode === 'api') {
+      await handleApiModeUpload(file);
+      e.target.value = null;
+      return;
+    }
+
+    // ── Original backend flow ──────────────────────────────────────
     try {
       setJobStatus('loading');
       setJobProgress('Uploading video...');
@@ -1332,22 +1408,58 @@ const AuraFlowStudioPro = () => {
         <div className="p-8 border-t border-slate-100 bg-white space-y-4">
           {/* Status/Progress display */}
           {jobProgress && (
-            <div className="text-center text-[11px] font-medium text-indigo-600 bg-indigo-50 py-2 px-4 rounded-xl">
+            <div className={`text-center text-[11px] font-medium py-2 px-4 rounded-xl ${
+              jobProgress.startsWith('❌') ? 'bg-red-50 text-red-600' : 'bg-indigo-50 text-indigo-600'
+            }`}>
               {jobProgress}
             </div>
           )}
 
-          {/* Load video button */}
+          {/* ── Processing Mode Switcher ── */}
+          <div className="flex items-center gap-2 p-1 bg-slate-100 rounded-2xl">
+            <button
+              onClick={() => setProcessingMode('backend')}
+              className={`flex-1 py-2.5 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 ${
+                processingMode === 'backend'
+                  ? 'bg-white text-slate-800 shadow-md ring-1 ring-slate-200'
+                  : 'text-slate-400 hover:text-slate-600'
+              }`}
+            >
+              <span>🖥</span> Backend
+            </button>
+            <button
+              onClick={() => setProcessingMode('api')}
+              className={`flex-1 py-2.5 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 ${
+                processingMode === 'api'
+                  ? 'bg-gradient-to-r from-violet-500 to-fuchsia-600 text-white shadow-lg shadow-violet-200'
+                  : 'text-slate-400 hover:text-slate-600'
+              }`}
+            >
+              <span>⚡</span> API Mode
+            </button>
+          </div>
+
+          {/* Mode description badge */}
+          <p className="text-center text-[10px] font-semibold text-slate-400 -mt-2">
+            {processingMode === 'api'
+              ? '⚡ OpenAI Whisper · GPT · TTS — no GPU needed'
+              : '🖥 Local pipeline · Whisper · CLIP · gTTS'}
+          </p>
+
+          {/* Upload / Process button */}
           <button
             onClick={() => uploadInputRef.current?.click()}
             disabled={jobStatus === 'loading'}
-            className={`w-full py-4 rounded-[20px] text-[12px] font-black uppercase tracking-[0.1em] shadow-xl transition-all active:scale-95 flex items-center justify-center gap-3 group ${jobStatus === 'loading'
-              ? 'bg-slate-400 text-white cursor-not-allowed'
-              : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-100'
-              }`}
+            className={`w-full py-4 rounded-[20px] text-[12px] font-black uppercase tracking-[0.1em] shadow-xl transition-all active:scale-95 flex items-center justify-center gap-3 group ${
+              jobStatus === 'loading'
+                ? 'bg-slate-400 text-white cursor-not-allowed'
+                : processingMode === 'api'
+                  ? 'bg-gradient-to-r from-violet-500 to-fuchsia-600 hover:from-violet-600 hover:to-fuchsia-700 text-white shadow-violet-200'
+                  : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-100'
+            }`}
           >
             {jobStatus === 'loading' && <Loader2 size={16} className="animate-spin" />}
-            {jobStatus === 'loading' ? 'Processing Video...' : 'Upload & Process New Video'}
+            {jobStatus === 'loading' ? 'Processing...' : 'Upload & Process New Video'}
             {jobStatus === 'idle' && <Upload size={16} className="group-hover:-translate-y-1 transition-transform" />}
           </button>
         </div>
