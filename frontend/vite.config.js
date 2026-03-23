@@ -8,7 +8,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'https://wto-rules-consultation-gif.trycloudflare.com',
+        target: 'https://allied-absorption-blacks-ethernet.trycloudflare.com',
         changeOrigin: true,
       }
     }
